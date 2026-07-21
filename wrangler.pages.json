@@ -1,0 +1,15 @@
+{
+  "name": "6nimmt",
+  "pages_build_output_dir": "dist/pages-out",
+  "compatibility_date": "2025-02-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "GameRoom",
+        "class_name": "GameRoom",
+        "script_name": "sfboardgames"
+      }
+    ]
+  }
+}

@@ -1,0 +1,175 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --felt: #0b3d2e;
+  --felt-deep: #07261d;
+  --ink: #0f172a;
+  --cream: #f8f4e8;
+  --card-face: #fffdf7;
+  --accent: #e8b84a;
+  --danger: #c44b4b;
+  --muted: #94a3b8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family:
+    "Segoe UI",
+    system-ui,
+    -apple-system,
+    sans-serif;
+  background:
+    radial-gradient(ellipse at top, #134e3a 0%, var(--felt-deep) 55%, #020617 100%);
+  color: var(--cream);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+input {
+  font: inherit;
+}
+
+/* Playing card */
+.card {
+  position: relative;
+  width: 4.25rem;
+  height: 6rem;
+  border-radius: 0.55rem;
+  background: linear-gradient(160deg, #fffdf7 0%, #f0e6d0 100%);
+  color: #1e293b;
+  border: 2px solid #d6c8a8;
+  box-shadow:
+    0 2px 0 #c4b48a,
+    0 8px 16px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.25rem 0.4rem;
+  user-select: none;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.card--sm {
+  width: 3.1rem;
+  height: 4.4rem;
+  font-size: 0.85rem;
+}
+
+.card--selectable {
+  cursor: pointer;
+}
+
+.card--selectable:hover,
+.card--selected {
+  transform: translateY(-8px);
+  box-shadow:
+    0 2px 0 #c4b48a,
+    0 14px 24px rgba(0, 0, 0, 0.35);
+  border-color: #c9a227;
+}
+
+.card--hidden {
+  background: linear-gradient(145deg, #1e3a5f, #0f2744);
+  color: #93c5fd;
+  border-color: #334155;
+}
+
+.card--hot {
+  border-color: #dc2626;
+  box-shadow:
+    0 0 0 2px rgba(220, 38, 38, 0.35),
+    0 8px 16px rgba(0, 0, 0, 0.25);
+}
+
+.card-number {
+  font-weight: 800;
+  font-size: 1.35em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.card--sm .card-number {
+  font-size: 1.1em;
+}
+
+.card-bulls {
+  font-size: 0.55rem;
+  letter-spacing: -0.05em;
+  line-height: 1.1;
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.card--sm .card-bulls {
+  font-size: 0.42rem;
+}
+
+.row-slot {
+  min-height: 4.6rem;
+  border-radius: 0.75rem;
+  border: 1px dashed rgba(248, 244, 232, 0.2);
+  background: rgba(0, 0, 0, 0.15);
+  padding: 0.4rem;
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.row-slot--target {
+  border-color: var(--accent);
+  background: rgba(232, 184, 74, 0.12);
+  animation: pulse-border 1.2s ease infinite;
+}
+
+@keyframes pulse-border {
+  50% {
+    border-color: #fde68a;
+  }
+}
+
+.toast {
+  animation: slide-in 0.25s ease;
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.felt-panel {
+  background: rgba(7, 38, 29, 0.72);
+  border: 1px solid rgba(248, 244, 232, 0.1);
+  backdrop-filter: blur(8px);
+  border-radius: 1rem;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+}

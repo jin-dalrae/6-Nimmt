@@ -1,0 +1,275 @@
+/**
+ * Core rules adapted from boardgamers/take6-engine (MIT)
+ * https://github.com/boardgamers/take6-engine
+ *
+ * Changes for SFboardgames:
+ * - Dropped lodash / node assert for Cloudflare Workers
+ * - Public view helpers for multiplayer
+ * - Auto-place when only one legal placement
+ */
+
+import { getCard } from "./card";
+import { cardsEqual, cloneState, shuffle, sumByPoints } from "./utils";
+import {
+  type AvailableMoves,
+  type Card,
+  type GameOptions,
+  type GameState,
+  type Move,
+  MoveName,
+  Phase,
+  type Player,
+  type PublicGameState,
+} from "./types";
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
+
+export function availableMoves(G: GameState, player: Player): AvailableMoves {
+  switch (G.phase) {
+    case Phase.ChooseCard:
+      return { [MoveName.ChooseCard]: [...player.hand] };
+    case Phase.PlaceCard:
+    default: {
+      const lastCards = G.rows.map((row) => row[row.length - 1]);
+      const face = player.faceDownCard!;
+
+      if (lastCards.every((card) => card.number > face.number)) {
+        return {
+          [MoveName.PlaceCard]: [0, 1, 2, 3].map((row) => ({
+            row,
+            replace: true,
+          })),
+        };
+      }
+
+      const candidates = lastCards.filter((c) => c.number < face.number);
+      const best = Math.max(...candidates.map((c) => c.number));
+      const row = lastCards.findIndex((c) => c.number === best);
+
+      return {
+        [MoveName.PlaceCard]: [
+          {
+            row,
+            replace: G.rows[row].length >= 5,
+          },
+        ],
+      };
+    }
+  }
+}
+
+export function setup(
+  numPlayers: number,
+  options: GameOptions = {},
+  seed?: string,
+  names: string[] = [],
+): GameState {
+  const resolved: GameState["options"] = {
+    points: options.points ?? 66,
+    handSize: options.handSize ?? 10,
+  };
+  const actualSeed = seed || Math.random().toString(36).slice(2);
+  const deck = shuffle(
+    Array.from({ length: 104 }, (_, i) => getCard(i + 1)),
+    actualSeed,
+  );
+
+  const rows = [
+    [deck.shift()!],
+    [deck.shift()!],
+    [deck.shift()!],
+    [deck.shift()!],
+  ] as GameState["rows"];
+
+  const players: Player[] = Array.from({ length: numPlayers }, (_, i) => ({
+    hand: deck.splice(0, resolved.handSize),
+    points: 0,
+    discard: [],
+    faceDownCard: null,
+    availableMoves: null,
+    name: names[i] ?? `Player ${i + 1}`,
+  }));
+
+  const G: GameState = {
+    players,
+    rows,
+    options: resolved,
+    phase: Phase.ChooseCard,
+    round: 1,
+    seed: actualSeed,
+  };
+
+  for (const player of G.players) {
+    player.availableMoves = availableMoves(G, player);
+  }
+
+  return G;
+}
+
+export function move(G: GameState, playerMove: Move, playerNumber: number): GameState {
+  const player = G.players[playerNumber];
+  const available = player.availableMoves?.[playerMove.name];
+
+  assert(available, `You cannot play ${playerMove.name} right now`);
+  assert(
+    available.some((x) =>
+      playerMove.name === MoveName.ChooseCard
+        ? cardsEqual(x as Card, playerMove.data as Card)
+        : (x as { row: number; replace: boolean }).row ===
+            (playerMove.data as { row: number }).row &&
+          (x as { row: number; replace: boolean }).replace ===
+            (playerMove.data as { replace: boolean }).replace,
+    ),
+    `Illegal ${playerMove.name}`,
+  );
+
+  switch (playerMove.name) {
+    case MoveName.ChooseCard: {
+      player.faceDownCard = playerMove.data;
+      player.hand.splice(
+        player.hand.findIndex((c) => cardsEqual(c, playerMove.data)),
+        1,
+      );
+      player.availableMoves = null;
+
+      if (G.players.every((pl) => pl.faceDownCard)) {
+        G.phase = Phase.PlaceCard;
+        return switchToNextPlayer(G);
+      }
+      return G;
+    }
+    case MoveName.PlaceCard: {
+      player.availableMoves = null;
+
+      if (playerMove.data.replace) {
+        player.discard.push(...G.rows[playerMove.data.row]);
+        player.points = sumByPoints(player.discard);
+        G.rows[playerMove.data.row] = [player.faceDownCard!];
+      } else {
+        G.rows[playerMove.data.row].push(player.faceDownCard!);
+      }
+
+      player.faceDownCard = null;
+      return switchToNextPlayer(G);
+    }
+  }
+}
+
+/** Auto-resolve forced placements (only one legal row). */
+export function autoPlaceIfPossible(G: GameState): GameState {
+  let state = G;
+  let guard = 0;
+
+  while (
+    !ended(state) &&
+    state.phase === Phase.PlaceCard &&
+    guard++ < 20
+  ) {
+    const actor = state.players.findIndex(
+      (pl) => pl.availableMoves?.[MoveName.PlaceCard]?.length === 1,
+    );
+    if (actor < 0) break;
+
+    const only = state.players[actor].availableMoves![MoveName.PlaceCard]![0];
+    state = move(state, { name: MoveName.PlaceCard, data: only }, actor);
+  }
+
+  return state;
+}
+
+function dealNewRound(G: GameState): void {
+  G.round += 1;
+  const fresh = setup(G.players.length, G.options, `${G.seed}-r${G.round}`);
+
+  for (let i = 0; i < G.players.length; i++) {
+    G.players[i].hand = fresh.players[i].hand;
+    G.players[i].faceDownCard = null;
+    G.players[i].availableMoves = null;
+  }
+
+  G.rows = fresh.rows;
+  G.phase = Phase.ChooseCard;
+
+  for (const player of G.players) {
+    player.availableMoves = availableMoves(G, player);
+  }
+}
+
+function switchToNextPlayer(G: GameState): GameState {
+  if (ended(G)) return G;
+
+  if (G.players.every((pl) => !pl.faceDownCard)) {
+    if (G.players.every((pl) => pl.hand.length === 0)) {
+      dealNewRound(G);
+      return G;
+    }
+
+    G.phase = Phase.ChooseCard;
+    for (const player of G.players) {
+      player.availableMoves = availableMoves(G, player);
+    }
+    return G;
+  }
+
+  const remaining = G.players.filter((pl) => pl.faceDownCard);
+  const lowest = Math.min(...remaining.map((pl) => pl.faceDownCard!.number));
+  const player = G.players.find((pl) => pl.faceDownCard?.number === lowest)!;
+  player.availableMoves = availableMoves(G, player);
+  return G;
+}
+
+export function ended(G: GameState): boolean {
+  return (
+    G.players.every((pl) => !pl.faceDownCard && pl.hand.length === 0) &&
+    G.players.some((pl) => pl.points >= G.options.points)
+  );
+}
+
+export function winnerIndexes(G: GameState): number[] {
+  if (!ended(G)) return [];
+  const min = Math.min(...G.players.map((pl) => pl.points));
+  return G.players
+    .map((pl, i) => (pl.points === min ? i : -1))
+    .filter((i) => i >= 0);
+}
+
+export function toPublicState(G: GameState, yourIndex: number): PublicGameState {
+  const isEnded = ended(G);
+  const revealCards =
+    G.phase === Phase.PlaceCard || isEnded;
+
+  return {
+    rows: G.rows.map((row) => row.map((c) => ({ ...c }))),
+    phase: G.phase,
+    round: G.round,
+    pointsToEnd: G.options.points,
+    yourIndex,
+    ended: isEnded,
+    winnerIndexes: winnerIndexes(G),
+    players: G.players.map((pl, i) => {
+      const isYou = i === yourIndex;
+      return {
+        name: pl.name ?? `Player ${i + 1}`,
+        points: pl.points,
+        handCount: pl.hand.length,
+        hasChosen: pl.faceDownCard !== null,
+        faceDownCard:
+          pl.faceDownCard && (isYou || revealCards)
+            ? { ...pl.faceDownCard }
+            : pl.faceDownCard
+              ? { number: 0, points: 0 }
+              : null,
+        discard: pl.discard.map((c) => ({ ...c })),
+        isYou,
+        hand: isYou ? pl.hand.map((c) => ({ ...c })) : undefined,
+        availableMoves: isYou ? pl.availableMoves : undefined,
+      };
+    }),
+  };
+}
+
+export function cloneGame(G: GameState): GameState {
+  return cloneState(G);
+}
