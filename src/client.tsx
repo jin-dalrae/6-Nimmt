@@ -172,20 +172,34 @@ function App() {
     return `Playing · ${activeRoom}`;
   }, [screen, connected, status, activeRoom]);
 
+  const isPlaying = screen === "room" && (status === "playing" || status === "ended");
+
   return (
-    <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-4 py-6 sm:py-10">
-      <header className="mb-8 text-center">
-        <p className="text-xs font-semibold uppercase tracking-[0.35em] text-amber-300/90">
+    <div
+      className={`mx-auto flex min-h-screen max-w-7xl flex-col px-4 ${
+        isPlaying
+          ? "app-shell--playing py-2 sm:py-4"
+          : "py-6 sm:py-10"
+      }`}
+    >
+      <header className={`text-center ${isPlaying ? "header--compact" : "mb-8"}`}>
+        <p className="brand-line text-xs font-semibold uppercase tracking-[0.35em] text-amber-300/90">
           SFboardgames
         </p>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">
+        <h1
+          className={`font-bold tracking-tight ${
+            isPlaying ? "" : "mt-2 text-3xl sm:text-4xl"
+          }`}
+        >
           6 Nimmt! <span className="text-amber-300">🐂</span>
         </h1>
-        <p className="mt-2 text-sm text-emerald-100/70">{subtitle}</p>
+        <p className={`text-emerald-100/70 ${isPlaying ? "mt-0.5 text-xs" : "mt-2 text-sm"}`}>
+          {subtitle}
+        </p>
       </header>
 
       {toast ? (
-        <div className="toast fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full bg-slate-900/95 px-4 py-2 text-sm text-amber-100 shadow-xl ring-1 ring-white/10">
+        <div className="toast fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom,0px))] left-1/2 z-50 max-w-[90vw] -translate-x-1/2 rounded-full bg-slate-900/95 px-4 py-2 text-center text-sm text-amber-100 shadow-xl ring-1 ring-white/10 lg:bottom-6">
           {toast}
         </div>
       ) : null}
@@ -300,7 +314,11 @@ function App() {
         <p className="text-center text-emerald-100/70">Loading game…</p>
       ) : null}
 
-      <footer className="mt-auto pt-10 text-center text-xs text-emerald-100/40">
+      <footer
+        className={`mt-auto text-center text-xs text-emerald-100/40 ${
+          isPlaying ? "hidden pb-2 pt-4 sm:block sm:pt-6" : "pt-10"
+        }`}
+      >
         SFboardgames · 6 Nimmt! fan project · not affiliated with Amigo Spiele
       </footer>
     </div>
