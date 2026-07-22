@@ -12,8 +12,8 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // Realtime rooms live on the Worker that owns GameRoom DOs
-    if (url.pathname.startsWith("/parties/")) {
+    // Realtime rooms + presence API live on the Worker that owns GameRoom DOs
+    if (url.pathname.startsWith("/parties/") || url.pathname.startsWith("/api/")) {
       // Preserve path/query; service binding handles WebSocket upgrades
       return env.GAME.fetch(request);
     }

@@ -2,7 +2,21 @@ import "./styles.css";
 import { createRoot } from "react-dom/client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePartySocket } from "partysocket/react";
-import type { AiStyle, ClientMessage, LobbyPlayer, ServerMessage } from "./game/protocol";
+import type {
+  AiStyle,
+  ClientMessage,
+  LobbyPlayer,
+  ServerMessage,
+  SpectatorInfo,
+} from "./game/protocol";
+import {
+  fetchRoomsPresence,
+  forgetRoom,
+  loadRecentRooms,
+  rememberRoom,
+  type RecentRoom,
+  type RoomPresenceInfo,
+} from "./game/recentRooms";
 import type { PublicGameState } from "./game/types";
 import { Lobby } from "./components/Lobby";
 import { GameBoard } from "./components/GameBoard";
@@ -21,6 +35,17 @@ function readQueryRoom(): string {
   return (q || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 5);
 }
 
+function formatRelative(ts: number): string {
+  const sec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (sec < 60) return "just now";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 48) return `${hr}h ago`;
+  const days = Math.floor(hr / 24);
+  return `${days}d ago`;
+}
+
 function App() {
   const [screen, setScreen] = useState<"home" | "room">("home");
   const [name, setName] = useState(() => localStorage.getItem("sfbg-name") || "");
@@ -30,6 +55,8 @@ function App() {
 
   const [status, setStatus] = useState<"lobby" | "playing" | "ended">("lobby");
   const [players, setPlayers] = useState<LobbyPlayer[]>([]);
+  const [spectators, setSpectators] = useState<SpectatorInfo[]>([]);
+  const [youRole, setYouRole] = useState<"player" | "spectator">("player");
   const [hostId, setHostId] = useState<string | null>(null);
   const [youId, setYouId] = useState("");
   const [maxPlayers, setMaxPlayers] = useState(10);
@@ -40,6 +67,9 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [pendingSoloBots, setPendingSoloBots] = useState(0);
+  const [recentRooms, setRecentRooms] = useState<RecentRoom[]>(() => loadRecentRooms());
+  const [presence, setPresence] = useState<Record<string, RoomPresenceInfo>>({});
+  const [presenceLoading, setPresenceLoading] = useState(false);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -57,23 +87,28 @@ function App() {
 
       switch (msg.type) {
         case "room":
-          setStatus(msg.status);
           setPlayers(msg.players);
+          setSpectators(msg.spectators ?? []);
           setHostId(msg.hostId);
           setMaxPlayers(msg.maxPlayers);
           setHasAiKey(msg.hasAiKey);
           setAiStyle(msg.aiStyle);
+          // youId empty = connect preview only — don't flip into "playing" UI yet
           if (msg.youId) {
             setYouId(msg.youId);
+            setYouRole(msg.youRole ?? "player");
             setJoined(true);
-          }
-          if (msg.status === "lobby") {
-            setGame(null);
+            setStatus(msg.status);
+            if (msg.status === "lobby") {
+              setGame(null);
+            }
           }
           break;
         case "state":
           setGame(msg.game);
           setStatus(msg.status);
+          setSpectators(msg.spectators ?? []);
+          if (msg.youAreSpectator) setYouRole("spectator");
           break;
         case "error":
           setError(msg.message);
@@ -125,6 +160,42 @@ function App() {
     setPendingSoloBots(0);
   }, [joined, youId, hostId, pendingSoloBots, status, send]);
 
+  // Remember room once successfully joined
+  useEffect(() => {
+    if (joined && activeRoom) {
+      setRecentRooms(rememberRoom(activeRoom));
+    }
+  }, [joined, activeRoom]);
+
+  // Poll human presence for recent rooms while on home
+  useEffect(() => {
+    if (screen !== "home" || recentRooms.length === 0) {
+      setPresence({});
+      return;
+    }
+
+    let cancelled = false;
+    let first = true;
+    async function refresh() {
+      if (first) setPresenceLoading(true);
+      const map = await fetchRoomsPresence(recentRooms.map((r) => r.code));
+      if (!cancelled) {
+        setPresence(map);
+        if (first) {
+          setPresenceLoading(false);
+          first = false;
+        }
+      }
+    }
+
+    void refresh();
+    const id = window.setInterval(() => void refresh(), 12_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [screen, recentRooms]);
+
   function enterRoom(code: string, soloBots = 0) {
     const room = code.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 5);
     if (room.length < 4) {
@@ -141,10 +212,13 @@ function App() {
     setGame(null);
     setStatus("lobby");
     setPlayers([]);
+    setSpectators([]);
+    setYouRole("player");
     setYouId("");
     setPendingSoloBots(soloBots);
     setActiveRoom(room);
     setScreen("room");
+    setRecentRooms(rememberRoom(room));
     const url = new URL(window.location.href);
     url.searchParams.set("room", room);
     window.history.replaceState({}, "", url.toString());
@@ -157,22 +231,28 @@ function App() {
     setJoined(false);
     setGame(null);
     setPlayers([]);
+    setSpectators([]);
+    setYouRole("player");
     setYouId("");
+    setRecentRooms(loadRecentRooms());
     const url = new URL(window.location.href);
     url.searchParams.delete("room");
     window.history.replaceState({}, "", url.toString());
   }
 
-  const isHost = youId !== "" && youId === hostId;
+  const isHost = youId !== "" && youId === hostId && youRole === "player";
+  const isSpectator = youRole === "spectator";
 
   const subtitle = useMemo(() => {
     if (screen === "home") return "Real-time multiplayer on Cloudflare";
     if (!connected) return "Connecting…";
     if (status === "lobby") return `Room ${activeRoom}`;
+    if (isSpectator) return `Watching · ${activeRoom}`;
     return `Playing · ${activeRoom}`;
-  }, [screen, connected, status, activeRoom]);
+  }, [screen, connected, status, activeRoom, isSpectator]);
 
-  const isPlaying = screen === "room" && (status === "playing" || status === "ended");
+  const isPlaying =
+    screen === "room" && joined && (status === "playing" || status === "ended");
 
   return (
     <div
@@ -265,6 +345,97 @@ function App() {
             </button>
           </div>
 
+          {recentRooms.length > 0 ? (
+            <div className="mt-6 border-t border-white/10 pt-5">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-emerald-100/80">
+                  Previous rooms
+                </h2>
+                {presenceLoading ? (
+                  <span className="text-[0.65rem] text-emerald-100/40">Updating…</span>
+                ) : (
+                  <span className="text-[0.65rem] text-emerald-100/40">Humans only · live</span>
+                )}
+              </div>
+              <ul className="space-y-2">
+                {recentRooms.map((r) => {
+                  const info = presence[r.code];
+                  const humans = info?.humans ?? [];
+                  const humanCount = info?.humanCount ?? 0;
+                  const roomStatus = info?.status;
+                  return (
+                    <li
+                      key={r.code}
+                      className="flex items-stretch gap-2 rounded-xl border border-white/10 bg-black/20 p-2"
+                    >
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-left hover:bg-white/5"
+                        onClick={() => {
+                          setRoomInput(r.code);
+                          enterRoom(r.code);
+                        }}
+                      >
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                          <span className="font-mono text-lg font-bold tracking-widest text-amber-300">
+                            {r.code}
+                          </span>
+                          <span className="text-[0.65rem] text-emerald-100/45">
+                            {formatRelative(r.lastJoinedAt)}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-xs leading-snug text-emerald-100/75">
+                          {info === undefined && presenceLoading ? (
+                            <span className="text-emerald-100/40">Checking who’s there…</span>
+                          ) : humanCount > 0 ? (
+                            <>
+                              <span className="font-medium text-emerald-300">
+                                {humanCount} human{humanCount === 1 ? "" : "s"} online
+                              </span>
+                              {" · "}
+                              {humans
+                                .map((h) =>
+                                  h.watching ? `${h.name} (watching)` : h.name,
+                                )
+                                .join(", ")}
+                              {roomStatus && roomStatus !== "lobby" ? (
+                                <span className="text-amber-200/90">
+                                  {" "}
+                                  · {roomStatus === "playing" ? "in game" : "game ended"}
+                                  {" · join to watch"}
+                                </span>
+                              ) : null}
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-emerald-100/45">No one there</span>
+                              {roomStatus === "playing" ? (
+                                <span className="text-amber-200/80"> · game running (AI only?)</span>
+                              ) : roomStatus === "ended" ? (
+                                <span className="text-emerald-100/40"> · last game ended</span>
+                              ) : null}
+                            </>
+                          )}
+                        </p>
+                      </button>
+                      <button
+                        type="button"
+                        title="Remove from list"
+                        className="shrink-0 self-center rounded-lg px-2 py-2 text-sm text-emerald-100/40 hover:bg-white/5 hover:text-emerald-100/80"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRecentRooms(forgetRoom(r.code));
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : null}
+
           <p className="mt-6 text-center text-xs leading-relaxed text-emerald-100/50">
             Multiplayer: share the room code. Solo: play against Gemini bots (or heuristics
             without a key). Engine adapted from{" "}
@@ -281,11 +452,28 @@ function App() {
         </div>
       ) : null}
 
-      {screen === "room" && status === "lobby" ? (
+      {screen === "room" && !joined ? (
+        <div className="mx-auto w-full max-w-md felt-panel p-6 text-center">
+          <p className="text-emerald-100/80">
+            {connected ? "Joining room…" : "Connecting…"}
+          </p>
+          {error ? <p className="mt-3 text-sm text-red-300">{error}</p> : null}
+          <button
+            type="button"
+            onClick={leaveRoom}
+            className="mt-4 rounded-xl border border-white/20 px-4 py-2 text-sm text-emerald-100 hover:bg-white/5"
+          >
+            Back to home
+          </button>
+        </div>
+      ) : null}
+
+      {screen === "room" && joined && status === "lobby" ? (
         <div className="flex flex-1 justify-center">
           <Lobby
             roomId={activeRoom}
             players={players}
+            spectators={spectators}
             hostId={hostId}
             youId={youId}
             maxPlayers={maxPlayers}
@@ -300,18 +488,29 @@ function App() {
         </div>
       ) : null}
 
-      {screen === "room" && (status === "playing" || status === "ended") && game ? (
+      {screen === "room" && joined && (status === "playing" || status === "ended") && game ? (
         <GameBoard
           game={game}
           isHost={isHost}
+          isSpectator={isSpectator}
+          spectators={spectators}
           onChoose={(cardNumber) => send({ type: "chooseCard", cardNumber })}
           onPlace={(row, replace) => send({ type: "placeCard", row, replace })}
           onRestart={() => send({ type: "restart" })}
         />
       ) : null}
 
-      {screen === "room" && (status === "playing" || status === "ended") && !game ? (
-        <p className="text-center text-emerald-100/70">Loading game…</p>
+      {screen === "room" && joined && (status === "playing" || status === "ended") && !game ? (
+        <div className="mx-auto w-full max-w-md felt-panel p-6 text-center">
+          <p className="text-emerald-100/70">Loading game…</p>
+          <button
+            type="button"
+            onClick={leaveRoom}
+            className="mt-4 rounded-xl border border-white/20 px-4 py-2 text-sm text-emerald-100 hover:bg-white/5"
+          >
+            Back to home
+          </button>
+        </div>
       ) : null}
 
       <footer

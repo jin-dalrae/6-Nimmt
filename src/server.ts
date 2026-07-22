@@ -22,7 +22,20 @@ import {
 } from "./game/engine";
 import type { GameState } from "./game/types";
 import { MoveName, Phase } from "./game/types";
-import type { ClientMessage, LobbyPlayer, ServerMessage } from "./game/protocol";
+import type {
+  ClientMessage,
+  LobbyPlayer,
+  ServerMessage,
+  SpectatorInfo,
+} from "./game/protocol";
+
+export type RoomPresence = {
+  roomId: string;
+  status: "lobby" | "playing" | "ended";
+  /** Connected humans only (AI excluded) — players + watchers */
+  humans: Array<{ name: string; watching?: boolean }>;
+  humanCount: number;
+};
 
 type Env = {
   GameRoom: DurableObjectNamespace<GameRoom>;
@@ -33,6 +46,7 @@ type Env = {
 type ConnState = {
   playerId: string;
   name: string;
+  role: "player" | "spectator";
 };
 
 type RoomPlayer = {
@@ -42,9 +56,17 @@ type RoomPlayer = {
   isBot: boolean;
 };
 
+type Spectator = {
+  id: string;
+  name: string;
+  connectionId: string | null;
+};
+
 type RoomData = {
   status: "lobby" | "playing" | "ended";
   players: RoomPlayer[];
+  /** Watching mid-game; promoted into players when back to lobby */
+  spectators: Spectator[];
   hostId: string | null;
   game: GameState | null;
   seats: string[];
@@ -57,6 +79,7 @@ function sleep(ms: number) {
 
 const MAX_PLAYERS = 10;
 const MIN_PLAYERS = 2;
+const MAX_SPECTATORS = 20;
 
 export class GameRoom extends Server<Env> {
   static options = { hibernate: true };
@@ -64,6 +87,7 @@ export class GameRoom extends Server<Env> {
   room: RoomData = {
     status: "lobby",
     players: [],
+    spectators: [],
     hostId: null,
     game: null,
     seats: [],
@@ -75,10 +99,11 @@ export class GameRoom extends Server<Env> {
   async onStart() {
     const saved = await this.ctx.storage.get<RoomData>("room");
     if (saved) {
-      // Migrate older rooms missing isBot / aiStyle
+      // Migrate older rooms missing isBot / aiStyle / spectators
       this.room = {
         ...saved,
         aiStyle: isAiStyle(saved.aiStyle) ? saved.aiStyle : "solid",
+        spectators: Array.isArray(saved.spectators) ? saved.spectators : [],
         players: saved.players.map((p) => ({
           ...p,
           isBot: "isBot" in p ? Boolean((p as RoomPlayer).isBot) : false,
@@ -94,6 +119,39 @@ export class GameRoom extends Server<Env> {
 
   private async persist() {
     await this.ctx.storage.put("room", this.room);
+  }
+
+  /** Connected humans only — used by home “recent rooms” list */
+  private presence(): RoomPresence {
+    const humans = [
+      ...this.room.players
+        .filter((p) => !p.isBot && p.connectionId !== null)
+        .map((p) => ({ name: p.name, watching: false as boolean })),
+      ...this.room.spectators
+        .filter((s) => s.connectionId !== null)
+        .map((s) => ({ name: s.name, watching: true as boolean })),
+    ];
+    return {
+      roomId: this.name,
+      status: this.room.status,
+      humans,
+      humanCount: humans.length,
+    };
+  }
+
+  /**
+   * HTTP: GET any path on this party returns live presence
+   * (no WebSocket join required).
+   */
+  async onRequest(_request: Request): Promise<Response> {
+    // Free abandoned ghost games so “previous rooms” shows accurate status
+    await this.resetAbandonedGame();
+    return Response.json(this.presence(), {
+      headers: {
+        "Cache-Control": "no-store",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
   }
 
   private send(conn: Connection, msg: ServerMessage) {
@@ -113,14 +171,77 @@ export class GameRoom extends Server<Env> {
     }));
   }
 
-  private sendRoom(conn: Connection, youId: string) {
+  private spectatorInfos(): SpectatorInfo[] {
+    return this.room.spectators.map((s) => ({
+      id: s.id,
+      name: s.name,
+      connected: s.connectionId !== null,
+    }));
+  }
+
+  private connectedHumansCount(): number {
+    const players = this.room.players.filter((p) => !p.isBot && p.connectionId !== null)
+      .length;
+    const watchers = this.room.spectators.filter((s) => s.connectionId !== null).length;
+    return players + watchers;
+  }
+
+  private nameTaken(name: string, exceptId?: string): boolean {
+    const n = name.toLowerCase();
+    if (
+      this.room.players.some(
+        (p) => p.name.toLowerCase() === n && p.id !== exceptId,
+      )
+    ) {
+      return true;
+    }
+    if (
+      this.room.spectators.some(
+        (s) => s.name.toLowerCase() === n && s.id !== exceptId,
+      )
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * If a game was left running with nobody human online (solo tab closed,
+   * everyone disconnected), clear it so the room is joinable again.
+   * Bots alone do not keep a game "locked".
+   */
+  private async resetAbandonedGame(): Promise<boolean> {
+    if (this.room.status === "lobby") return false;
+    if (this.connectedHumansCount() > 0) return false;
+
+    this.room.status = "lobby";
+    this.room.game = null;
+    this.room.seats = [];
+    this.room.spectators = [];
+    // Drop ghost humans; keep bots for a quick rematch if desired
+    this.room.players = this.room.players.filter((p) => p.isBot);
+    this.room.hostId =
+      this.room.players.find((p) => !p.isBot)?.id ??
+      this.room.players[0]?.id ??
+      null;
+    await this.persist();
+    return true;
+  }
+
+  private sendRoom(
+    conn: Connection,
+    youId: string,
+    youRole: "player" | "spectator",
+  ) {
     this.send(conn, {
       type: "room",
       roomId: this.name,
       status: this.room.status,
       players: this.lobbyPlayers(),
+      spectators: this.spectatorInfos(),
       hostId: this.room.hostId,
       youId,
+      youRole,
       maxPlayers: MAX_PLAYERS,
       hasAiKey: Boolean(this.apiKey()),
       aiStyle: this.room.aiStyle,
@@ -129,9 +250,9 @@ export class GameRoom extends Server<Env> {
 
   private broadcastRoom() {
     for (const conn of this.getConnections<ConnState>()) {
-      const youId = conn.state?.playerId;
-      if (!youId) continue;
-      this.sendRoom(conn, youId);
+      const st = conn.state;
+      if (!st?.playerId) continue;
+      this.sendRoom(conn, st.playerId, st.role);
     }
   }
 
@@ -147,11 +268,15 @@ export class GameRoom extends Server<Env> {
   private pushGameState() {
     if (!this.room.game) return;
 
+    const specs = this.spectatorInfos().filter((s) => s.connected);
+
     for (const conn of this.getConnections<ConnState>()) {
-      const playerId = conn.state?.playerId;
-      if (!playerId) continue;
-      const idx = this.seatIndex(playerId);
-      if (idx < 0) continue;
+      const st = conn.state;
+      if (!st?.playerId) continue;
+
+      const isSpectator = st.role === "spectator";
+      const idx = isSpectator ? -1 : this.seatIndex(st.playerId);
+      if (!isSpectator && idx < 0) continue;
 
       const publicState = toPublicState(this.room.game, idx);
       publicState.players.forEach((p, i) => {
@@ -164,6 +289,8 @@ export class GameRoom extends Server<Env> {
         type: "state",
         game: publicState,
         status,
+        spectators: specs,
+        youAreSpectator: isSpectator,
       });
     }
   }
@@ -283,14 +410,20 @@ export class GameRoom extends Server<Env> {
     }
   }
 
-  onConnect(connection: Connection) {
+  async onConnect(connection: Connection) {
+    // Don't lock the room behind a ghost game with zero humans
+    await this.resetAbandonedGame();
+
     this.send(connection, {
       type: "room",
       roomId: this.name,
       status: this.room.status,
       players: this.lobbyPlayers(),
+      spectators: this.spectatorInfos(),
       hostId: this.room.hostId,
+      // Empty youId = not joined yet (client must not treat this as in-game)
       youId: "",
+      youRole: "player",
       maxPlayers: MAX_PLAYERS,
       hasAiKey: Boolean(this.apiKey()),
       aiStyle: this.room.aiStyle,
@@ -347,12 +480,21 @@ export class GameRoom extends Server<Env> {
   }
 
   async onClose(connection: Connection) {
-    const playerId = (connection.state as ConnState | undefined)?.playerId;
+    const st = connection.state as ConnState | undefined;
+    const playerId = st?.playerId;
     if (!playerId) return;
 
-    const player = this.room.players.find((p) => p.id === playerId);
-    if (player && player.connectionId === connection.id) {
-      player.connectionId = null;
+    if (st.role === "spectator") {
+      const spec = this.room.spectators.find((s) => s.id === playerId);
+      if (spec && spec.connectionId === connection.id) {
+        // Drop disconnected spectators (they aren't mid-hand)
+        this.room.spectators = this.room.spectators.filter((s) => s.id !== playerId);
+      }
+    } else {
+      const player = this.room.players.find((p) => p.id === playerId);
+      if (player && player.connectionId === connection.id) {
+        player.connectionId = null;
+      }
     }
 
     if (this.room.status === "lobby") {
@@ -360,12 +502,16 @@ export class GameRoom extends Server<Env> {
       this.room.players = this.room.players.filter(
         (p) => p.isBot || p.connectionId !== null,
       );
+      this.room.spectators = this.room.spectators.filter((s) => s.connectionId !== null);
       if (this.room.hostId === playerId) {
         this.room.hostId =
           this.room.players.find((p) => !p.isBot)?.id ??
           this.room.players[0]?.id ??
           null;
       }
+    } else {
+      // Last human left mid-game → free the room
+      await this.resetAbandonedGame();
     }
 
     await this.persist();
@@ -379,17 +525,34 @@ export class GameRoom extends Server<Env> {
       return;
     }
 
-    const existingByConn = this.room.players.find((p) => p.connectionId === connection.id);
-    if (existingByConn) {
+    // Ghost games (bots only / everyone disconnected) should not block rejoin
+    await this.resetAbandonedGame();
+
+    // Already joined on this socket
+    const existingPlayer = this.room.players.find((p) => p.connectionId === connection.id);
+    if (existingPlayer) {
       connection.setState({
-        playerId: existingByConn.id,
-        name: existingByConn.name,
+        playerId: existingPlayer.id,
+        name: existingPlayer.name,
+        role: "player",
       } satisfies ConnState);
-      this.sendRoom(connection, existingByConn.id);
+      this.sendRoom(connection, existingPlayer.id, "player");
+      if (this.room.game) this.pushGameState();
+      return;
+    }
+    const existingSpec = this.room.spectators.find((s) => s.connectionId === connection.id);
+    if (existingSpec) {
+      connection.setState({
+        playerId: existingSpec.id,
+        name: existingSpec.name,
+        role: "spectator",
+      } satisfies ConnState);
+      this.sendRoom(connection, existingSpec.id, "spectator");
       if (this.room.game) this.pushGameState();
       return;
     }
 
+    // Reclaim seated player who disconnected (same name)
     const reclaim = this.room.players.find(
       (p) =>
         !p.isBot &&
@@ -398,28 +561,79 @@ export class GameRoom extends Server<Env> {
     );
     if (reclaim) {
       reclaim.connectionId = connection.id;
-      connection.setState({ playerId: reclaim.id, name: reclaim.name } satisfies ConnState);
+      // Leave spectator list if they were listed somehow
+      this.room.spectators = this.room.spectators.filter((s) => s.id !== reclaim.id);
+      connection.setState({
+        playerId: reclaim.id,
+        name: reclaim.name,
+        role: "player",
+      } satisfies ConnState);
       await this.persist();
       this.broadcastRoom();
       if (this.room.game) this.pushGameState();
-      this.send(connection, { type: "toast", message: "Reconnected" });
+      this.send(connection, { type: "toast", message: "Reconnected to your seat" });
       return;
     }
 
-    if (this.room.status !== "lobby") {
+    // Reclaim spectator who refreshed
+    const reclaimSpec = this.room.spectators.find(
+      (s) => s.connectionId === null && s.name.toLowerCase() === name.toLowerCase(),
+    );
+    if (reclaimSpec) {
+      reclaimSpec.connectionId = connection.id;
+      connection.setState({
+        playerId: reclaimSpec.id,
+        name: reclaimSpec.name,
+        role: "spectator",
+      } satisfies ConnState);
+      await this.persist();
+      this.broadcastRoom();
+      if (this.room.game) this.pushGameState();
+      this.send(connection, { type: "toast", message: "Back to watching" });
+      return;
+    }
+
+    // Mid-game or ended: join as spectator (watch now, lobby next)
+    if (this.room.status === "playing" || this.room.status === "ended") {
+      if (this.nameTaken(name)) {
+        this.send(connection, {
+          type: "error",
+          message: "Name already taken — pick another, or use a seated player's name to reconnect",
+        });
+        return;
+      }
+      if (this.room.spectators.filter((s) => s.connectionId).length >= MAX_SPECTATORS) {
+        this.send(connection, { type: "error", message: "Too many watchers right now" });
+        return;
+      }
+
+      const id = crypto.randomUUID();
+      this.room.spectators.push({ id, name, connectionId: connection.id });
+      connection.setState({ playerId: id, name, role: "spectator" } satisfies ConnState);
+      await this.persist();
+      this.broadcastRoom();
+      if (this.room.game) this.pushGameState();
+      this.broadcastJson({
+        type: "toast",
+        message: `${name} is watching`,
+      });
       this.send(connection, {
-        type: "error",
-        message: "Game already in progress — join with the same name to reconnect",
+        type: "toast",
+        message:
+          this.room.status === "ended"
+            ? "Watching results — you'll join the lobby for the next game"
+            : "You're watching — you'll be in the lobby for the next game",
       });
       return;
     }
 
+    // Lobby: join as player
     if (this.room.players.length >= MAX_PLAYERS) {
       this.send(connection, { type: "error", message: "Room is full" });
       return;
     }
 
-    if (this.room.players.some((p) => p.name.toLowerCase() === name.toLowerCase())) {
+    if (this.nameTaken(name)) {
       this.send(connection, { type: "error", message: "Name already taken in this room" });
       return;
     }
@@ -430,7 +644,7 @@ export class GameRoom extends Server<Env> {
       this.room.hostId = id;
     }
 
-    connection.setState({ playerId: id, name } satisfies ConnState);
+    connection.setState({ playerId: id, name, role: "player" } satisfies ConnState);
     await this.persist();
     this.broadcastRoom();
     this.send(connection, { type: "toast", message: `Joined room ${this.name}` });
@@ -608,10 +822,36 @@ export class GameRoom extends Server<Env> {
     this.room.status = "lobby";
     this.room.game = null;
     this.room.seats = [];
-    // Keep bots; drop only disconnected humans
-    this.room.players = this.room.players.filter(
+
+    // Keep bots + connected seated humans
+    let nextPlayers = this.room.players.filter(
       (p) => p.isBot || p.connectionId !== null,
     );
+
+    // Promote connected watchers into the next lobby (they're waiting to play)
+    const waiting = this.room.spectators.filter((s) => s.connectionId !== null);
+    const promoted: string[] = [];
+    for (const s of waiting) {
+      if (nextPlayers.length >= MAX_PLAYERS) break;
+      if (nextPlayers.some((p) => p.name.toLowerCase() === s.name.toLowerCase())) {
+        continue;
+      }
+      nextPlayers.push({
+        id: s.id,
+        name: s.name,
+        connectionId: s.connectionId,
+        isBot: false,
+      });
+      promoted.push(s.id);
+    }
+
+    // Leftover watchers stay listed if room was full
+    this.room.spectators = waiting
+      .filter((s) => !promoted.includes(s.id))
+      .map((s) => ({ ...s }));
+
+    this.room.players = nextPlayers;
+
     if (!this.room.players.find((p) => p.id === this.room.hostId)) {
       this.room.hostId =
         this.room.players.find((p) => !p.isBot)?.id ??
@@ -619,16 +859,35 @@ export class GameRoom extends Server<Env> {
         null;
     }
 
+    // Flip connection roles for promoted watchers
+    for (const conn of this.getConnections<ConnState>()) {
+      const st = conn.state;
+      if (!st) continue;
+      if (promoted.includes(st.playerId)) {
+        conn.setState({ ...st, role: "player" });
+      }
+    }
+
     await this.persist();
     this.broadcastRoom();
-    this.broadcastJson({ type: "toast", message: "Back to lobby" });
+    const n = promoted.length;
+    this.broadcastJson({
+      type: "toast",
+      message:
+        n > 0
+          ? `Back to lobby — ${n} watcher${n === 1 ? "" : "s"} joined the table`
+          : "Back to lobby",
+    });
   }
 
   private async handleLeave(connection: Connection) {
-    const playerId = (connection.state as ConnState | undefined)?.playerId;
+    const st = connection.state as ConnState | undefined;
+    const playerId = st?.playerId;
     if (!playerId) return;
 
-    if (this.room.status === "lobby") {
+    if (st.role === "spectator") {
+      this.room.spectators = this.room.spectators.filter((s) => s.id !== playerId);
+    } else if (this.room.status === "lobby") {
       this.room.players = this.room.players.filter((p) => p.id !== playerId);
       if (this.room.hostId === playerId) {
         this.room.hostId =
@@ -639,6 +898,7 @@ export class GameRoom extends Server<Env> {
     } else {
       const p = this.room.players.find((x) => x.id === playerId);
       if (p && !p.isBot) p.connectionId = null;
+      await this.resetAbandonedGame();
     }
 
     connection.setState(null);
@@ -647,8 +907,66 @@ export class GameRoom extends Server<Env> {
   }
 }
 
+async function roomPresence(env: Env, code: string): Promise<RoomPresence> {
+  const roomId = code.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 5);
+  const id = env.GameRoom.idFromName(roomId);
+  const stub = env.GameRoom.get(id);
+  const req = new Request("https://game-room.internal/presence", {
+    headers: {
+      "x-partykit-room": roomId,
+      "x-partykit-namespace": "game-room",
+    },
+  });
+  try {
+    const res = await stub.fetch(req);
+    if (!res.ok) {
+      return { roomId, status: "lobby", humans: [], humanCount: 0 };
+    }
+    return (await res.json()) as RoomPresence;
+  } catch {
+    return { roomId, status: "lobby", humans: [], humanCount: 0 };
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    // CORS preflight for local/dev tooling
+    if (request.method === "OPTIONS" && url.pathname.startsWith("/api/")) {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+        },
+      });
+    }
+
+    // Batch presence for recent-room list: GET /api/rooms?codes=ABC12,XYZ99
+    if (request.method === "GET" && url.pathname === "/api/rooms") {
+      const raw = url.searchParams.get("codes") || "";
+      const codes = [
+        ...new Set(
+          raw
+            .split(",")
+            .map((c) => c.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 5))
+            .filter((c) => c.length >= 4),
+        ),
+      ].slice(0, 20);
+
+      const rooms = await Promise.all(codes.map((c) => roomPresence(env, c)));
+      return Response.json(
+        { rooms },
+        {
+          headers: {
+            "Cache-Control": "no-store",
+            "Access-Control-Allow-Origin": "*",
+          },
+        },
+      );
+    }
+
     const party = await routePartykitRequest(request, env);
     if (party) return party;
 

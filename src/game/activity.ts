@@ -53,13 +53,29 @@ export function phaseStatus(game: PublicGameState): {
     };
   }
 
-  const you = game.players[game.yourIndex];
+  const watching = game.yourIndex < 0;
+  const you = watching ? undefined : game.players[game.yourIndex];
   const ready = game.players.filter((p) => p.hasChosen).length;
   const total = game.players.length;
   const waiting = game.players.filter((p) => !p.hasChosen);
   const readyOthers = game.players.filter((p) => p.hasChosen && !p.isYou);
   const stillOut = game.players.filter((p) => !p.hasChosen && !p.isYou);
   const overThreshold = game.players.filter((p) => p.points >= game.pointsToEnd);
+
+  if (watching) {
+    if (game.phase === Phase.ChooseCard) {
+      return {
+        headline: "Watching — players picking cards",
+        detail: `${ready}/${total} locked in. You'll join the lobby for the next game.`,
+        tone: "info",
+      };
+    }
+    return {
+      headline: "Watching — cards placing",
+      detail: "Lowest card goes first. You'll join the lobby for the next game.",
+      tone: "info",
+    };
+  }
 
   const finalDealNote =
     game.thresholdReached && overThreshold.length > 0
@@ -121,7 +137,22 @@ export function phaseStatus(game: PublicGameState): {
   return { headline: "Playing…", detail: "", tone: "info" };
 }
 
-/** Diff previous → next public state into human activity lines. */
+function who(p: { isYou?: boolean; name: string }): string {
+  return p.isYou ? "You" : p.name;
+}
+
+function cardsWord(n: number): string {
+  return n === 1 ? "1 card" : `${n} cards`;
+}
+
+function bullsWord(n: number): string {
+  return n === 1 ? "1 🐂" : `${n} 🐂`;
+}
+
+/**
+ * Meaningful events only: who took how many cards / bull heads.
+ * Skips noise (locked in, normal place on table).
+ */
 export function diffActivity(
   prev: PublicGameState | null,
   next: PublicGameState,
@@ -132,113 +163,74 @@ export function diffActivity(
   if (!prev) {
     out.push({
       id: ts(),
-      text: `${dealLabel(next)} started — ${trickLabel(next)}. Everyone picks a card.`,
+      text: `${dealLabel(next)} · ${trickLabel(next)} — hands dealt`,
       tone: "info",
     });
     return out;
   }
 
   if (next.round !== prev.round) {
+    // End of previous deal summary if useful
     out.push({
       id: ts(),
-      text: `${dealLabel(next)} — new hands dealt. Starting ${trickLabel(next)}.`,
+      text: `${dealLabel(next)} — new hands (${trickLabel(next)})`,
       tone: "good",
     });
   }
 
-  // Someone locked in a card
+  // Row takes only — the events that change score
   for (let i = 0; i < next.players.length; i++) {
     const a = prev.players[i];
     const b = next.players[i];
     if (!a || !b) continue;
-    if (!a.hasChosen && b.hasChosen) {
+
+    const cardsTaken = Math.max(0, (b.discard?.length ?? 0) - (a.discard?.length ?? 0));
+    const bulls = b.points - a.points;
+
+    if (cardsTaken > 0 || bulls > 0) {
+      // Prefer discard delta; fall back to points-only if discard missing
+      const nCards = cardsTaken > 0 ? cardsTaken : null;
+      const name = who(b);
+      const verb = b.isYou ? "got" : "got";
+
+      let text: string;
+      if (nCards !== null && bulls > 0) {
+        text = `${name} ${verb} ${cardsWord(nCards)} (+${bullsWord(bulls)}) · total ${b.points} 🐂`;
+      } else if (nCards !== null) {
+        text = `${name} ${verb} ${cardsWord(nCards)} · total ${b.points} 🐂`;
+      } else {
+        text = `${name} scored +${bullsWord(bulls)} · total ${b.points} 🐂`;
+      }
+
       out.push({
         id: ts(),
-        text: b.isYou
-          ? "You locked in a card."
-          : `${b.name} locked in a card.${b.isBot ? " 🤖" : ""}`,
-        tone: b.isYou ? "good" : "info",
+        text,
+        tone: "hot",
       });
-    }
-  }
 
-  // All revealed → place phase
-  if (prev.phase === Phase.ChooseCard && next.phase === Phase.PlaceCard) {
-    const cards = next.players
-      .filter((p) => p.faceDownCard && p.faceDownCard.number > 0)
-      .map((p) => `${p.name} #${p.faceDownCard!.number}`)
-      .join(" · ");
-    out.push({
-      id: ts(),
-      text: `All cards revealed (low → high): ${cards}`,
-      tone: "good",
-    });
-  }
-
-  // Placements / row takes (face-down cleared, points or rows changed)
-  for (let i = 0; i < next.players.length; i++) {
-    const a = prev.players[i];
-    const b = next.players[i];
-    if (!a || !b) continue;
-    const had = a.faceDownCard && a.faceDownCard.number !== 0 ? a.faceDownCard : null;
-    const hadHidden = a.hasChosen && a.faceDownCard?.number === 0;
-    const gone = a.hasChosen && !b.hasChosen;
-
-    if (gone) {
-      const delta = b.points - a.points;
-      const cardNum = had?.number;
-      if (delta > 0) {
+      const thr = next.pointsToEnd;
+      if (a.points < thr && b.points >= thr && !next.ended) {
         out.push({
           id: ts(),
-          text: `${b.isYou ? "You" : b.name} took a row${cardNum ? ` with #${cardNum}` : ""} → +${delta} 🐂 (now ${b.points})`,
+          text: `${name} hit ${b.points} (≥${thr}) — finish this deal`,
           tone: "hot",
-        });
-        const thr = next.pointsToEnd;
-        if (a.points < thr && b.points >= thr && !next.ended) {
-          out.push({
-            id: ts(),
-            text: `${b.isYou ? "You are" : `${b.name} is`} at ${b.points} (≥${thr}) — finish this deal, then scores are final.`,
-            tone: "hot",
-          });
-        }
-      } else if (cardNum) {
-        out.push({
-          id: ts(),
-          text: `${b.isYou ? "You" : b.name} placed #${cardNum} on the table.`,
-          tone: "info",
-        });
-      } else if (hadHidden || a.hasChosen) {
-        out.push({
-          id: ts(),
-          text: `${b.isYou ? "You" : b.name} placed a card on the table.`,
-          tone: "info",
         });
       }
     }
   }
 
-  // New trick after place → choose
-  if (
-    prev.phase === Phase.PlaceCard &&
-    next.phase === Phase.ChooseCard &&
-    next.round === prev.round &&
-    !next.ended
-  ) {
-    out.push({
-      id: ts(),
-      text: `Trick done → ${trickLabel(next)}. Pick your next card.`,
-      tone: "good",
-    });
-  }
+  // End of a full draw with no takes — skip (noise). Optional short note if anyone cares — skip.
 
   if (!prev.ended && next.ended) {
-    const winners = next.winnerIndexes.map((i) => next.players[i]?.name).filter(Boolean);
-    const losers = (next.loserIndexes ?? [])
-      .map((i) => next.players[i]?.name)
-      .filter(Boolean);
+    const ranked = [...next.players]
+      .map((p, i) => ({ p, i }))
+      .sort((a, b) => a.p.points - b.p.points);
+    const lines = ranked
+      .map(({ p }, rank) => `${rank + 1}. ${who(p)} ${p.points} 🐂`)
+      .join(" · ");
     out.push({
       id: ts(),
-      text: `Deal finished — game over! Winner${winners.length > 1 ? "s" : ""} (fewest 🐂): ${winners.join(", ")}. Highest: ${losers.join(", ")}.`,
+      text: `Game over — ${lines}`,
       tone: "good",
     });
   }

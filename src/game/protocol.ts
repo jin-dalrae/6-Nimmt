@@ -21,14 +21,25 @@ export type LobbyPlayer = {
   isBot: boolean;
 };
 
+/** Watcher during an in-progress (or just-ended) game */
+export type SpectatorInfo = {
+  id: string;
+  name: string;
+  connected: boolean;
+};
+
 export type ServerMessage =
   | {
       type: "room";
       roomId: string;
       status: "lobby" | "playing" | "ended";
       players: LobbyPlayer[];
+      /** People watching (not in the current hand) */
+      spectators: SpectatorInfo[];
       hostId: string | null;
       youId: string;
+      /** Seated player vs mid-game watcher */
+      youRole: "player" | "spectator";
       maxPlayers: number;
       hasAiKey: boolean;
       aiStyle: AiStyle;
@@ -37,6 +48,8 @@ export type ServerMessage =
       type: "state";
       game: PublicGameState;
       status: "playing" | "ended";
+      spectators: SpectatorInfo[];
+      youAreSpectator: boolean;
     }
   | { type: "error"; message: string }
   | { type: "toast"; message: string };

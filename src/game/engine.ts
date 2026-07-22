@@ -273,6 +273,7 @@ export function loserIndexes(G: GameState): number[] {
 
 export function toPublicState(G: GameState, yourIndex: number): PublicGameState {
   const isEnded = ended(G);
+  const isSpectator = yourIndex < 0;
   const revealCards =
     G.phase === Phase.PlaceCard || isEnded;
 
@@ -282,13 +283,13 @@ export function toPublicState(G: GameState, yourIndex: number): PublicGameState 
     round: G.round,
     handSize: G.options.handSize,
     pointsToEnd: G.options.points,
-    yourIndex,
+    yourIndex: isSpectator ? -1 : yourIndex,
     ended: isEnded,
     thresholdReached: thresholdReached(G),
     winnerIndexes: winnerIndexes(G),
     loserIndexes: loserIndexes(G),
     players: G.players.map((pl, i) => {
-      const isYou = i === yourIndex;
+      const isYou = !isSpectator && i === yourIndex;
       return {
         name: pl.name ?? `Player ${i + 1}`,
         points: pl.points,

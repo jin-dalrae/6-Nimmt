@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { AI_STYLES, type AiStyle } from "../game/ai";
-import type { LobbyPlayer } from "../game/protocol";
+import type { LobbyPlayer, SpectatorInfo } from "../game/protocol";
 
 type Props = {
   roomId: string;
   players: LobbyPlayer[];
+  spectators?: SpectatorInfo[];
   hostId: string | null;
   youId: string;
   maxPlayers: number;
@@ -21,6 +22,7 @@ type Props = {
 export function Lobby({
   roomId,
   players,
+  spectators = [],
   hostId,
   youId,
   maxPlayers,
@@ -129,6 +131,33 @@ export function Lobby({
           </li>
         ))}
       </ul>
+
+      {spectators.length > 0 ? (
+        <div className="mb-4">
+          <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-emerald-100/80">
+            Waiting for a seat ({spectators.length})
+          </h2>
+          <ul className="space-y-1.5">
+            {spectators.map((s) => (
+              <li
+                key={s.id}
+                className="flex items-center justify-between rounded-lg bg-sky-950/30 px-3 py-2 text-sm ring-1 ring-sky-400/20"
+              >
+                <span>
+                  👁 {s.name}
+                  {s.id === youId ? (
+                    <span className="ml-2 text-xs text-amber-300">(you)</span>
+                  ) : null}
+                </span>
+                <span className="text-xs text-sky-300/80">next game</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1.5 text-xs text-emerald-100/45">
+            Room was full after the last game — seats free up if someone leaves.
+          </p>
+        </div>
+      ) : null}
 
       {isHost ? (
         <div className="mb-4 flex flex-wrap gap-2">
