@@ -21,7 +21,7 @@ Template pattern from [threepointone/partyvite](https://github.com/threepointone
 2. **Create room** (or enter a friend’s code) and share the code / invite link.
 3. Host clicks **Start game** (2–10 players).
 4. Each turn: everyone picks a card face-down → cards reveal low-to-high and place on rows.
-5. Taking a 6th card (or choosing a row when your card is too low) scores bull heads. Game ends when someone reaches **66** points — **lowest** score wins.
+5. Taking a 6th card (or choosing a row when your card is too low) scores bull heads. When someone reaches **66** (or more), **finish the current deal** (play out remaining cards), then stop. **Lowest** bull-head total wins; highest loses the race.
 
 ### Solo vs AI
 

@@ -197,11 +197,28 @@ function dealNewRound(G: GameState): void {
   }
 }
 
+function finalizeEnded(G: GameState): void {
+  for (const player of G.players) {
+    player.availableMoves = null;
+    player.faceDownCard = null;
+  }
+}
+
 function switchToNextPlayer(G: GameState): GameState {
-  if (ended(G)) return G;
+  // Official 6 Nimmt: once someone reaches the threshold, finish the *current deal*
+  // (all cards from hands), then stop — do not deal another hand.
+  if (ended(G)) {
+    finalizeEnded(G);
+    return G;
+  }
 
   if (G.players.every((pl) => !pl.faceDownCard)) {
     if (G.players.every((pl) => pl.hand.length === 0)) {
+      // Safety: never redeal if the threshold was hit this deal
+      if (G.players.some((pl) => pl.points >= G.options.points)) {
+        finalizeEnded(G);
+        return G;
+      }
       dealNewRound(G);
       return G;
     }
@@ -220,6 +237,11 @@ function switchToNextPlayer(G: GameState): GameState {
   return G;
 }
 
+/**
+ * Game ends only after the current deal is fully played *and* someone has
+ * reached the point threshold (default 66). Hitting 66 mid-deal does not
+ * stop the remaining cards — play out the hand first.
+ */
 export function ended(G: GameState): boolean {
   return (
     G.players.every((pl) => !pl.faceDownCard && pl.hand.length === 0) &&
@@ -227,11 +249,25 @@ export function ended(G: GameState): boolean {
   );
 }
 
+/** True once someone is at/over the threshold (even mid-deal). */
+export function thresholdReached(G: GameState): boolean {
+  return G.players.some((pl) => pl.points >= G.options.points);
+}
+
 export function winnerIndexes(G: GameState): number[] {
   if (!ended(G)) return [];
   const min = Math.min(...G.players.map((pl) => pl.points));
   return G.players
     .map((pl, i) => (pl.points === min ? i : -1))
+    .filter((i) => i >= 0);
+}
+
+/** Highest bull-head totals — “lost” the race (can be ties). */
+export function loserIndexes(G: GameState): number[] {
+  if (!ended(G)) return [];
+  const max = Math.max(...G.players.map((pl) => pl.points));
+  return G.players
+    .map((pl, i) => (pl.points === max ? i : -1))
     .filter((i) => i >= 0);
 }
 
@@ -244,10 +280,13 @@ export function toPublicState(G: GameState, yourIndex: number): PublicGameState 
     rows: G.rows.map((row) => row.map((c) => ({ ...c }))),
     phase: G.phase,
     round: G.round,
+    handSize: G.options.handSize,
     pointsToEnd: G.options.points,
     yourIndex,
     ended: isEnded,
+    thresholdReached: thresholdReached(G),
     winnerIndexes: winnerIndexes(G),
+    loserIndexes: loserIndexes(G),
     players: G.players.map((pl, i) => {
       const isYou = i === yourIndex;
       return {

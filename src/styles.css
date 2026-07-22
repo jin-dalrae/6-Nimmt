@@ -308,10 +308,11 @@ input {
   }
 }
 
-/* Room for fixed dock so rows aren't covered */
+/* Room for fixed dock + status strip so bottom content (scoring) is scrollable */
 @media (max-width: 1023px) {
   .play-shell--with-hand {
-    padding-bottom: calc(9.5rem + var(--safe-bottom));
+    /* hand cards + ready strip + safe area — enough to scroll past dock */
+    padding-bottom: calc(14.5rem + var(--safe-bottom));
   }
 }
 

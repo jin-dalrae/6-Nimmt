@@ -199,7 +199,7 @@ function App() {
       </header>
 
       {toast ? (
-        <div className="toast fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom,0px))] left-1/2 z-50 max-w-[90vw] -translate-x-1/2 rounded-full bg-slate-900/95 px-4 py-2 text-center text-sm text-amber-100 shadow-xl ring-1 ring-white/10 lg:bottom-6">
+        <div className="toast fixed bottom-[calc(11rem+env(safe-area-inset-bottom,0px))] left-1/2 z-50 max-w-[90vw] -translate-x-1/2 rounded-full bg-slate-900/95 px-4 py-2 text-center text-sm text-amber-100 shadow-xl ring-1 ring-white/10 lg:bottom-6">
           {toast}
         </div>
       ) : null}

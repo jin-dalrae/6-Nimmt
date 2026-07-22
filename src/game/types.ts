@@ -70,9 +70,15 @@ export interface PublicGameState {
   rows: Card[][];
   phase: Phase;
   round: number;
+  /** Cards dealt per player each deal (usually 10) */
+  handSize: number;
   pointsToEnd: number;
   players: PublicPlayer[];
   yourIndex: number;
   ended: boolean;
+  /** Someone already has ≥ pointsToEnd; finish this deal, then game ends */
+  thresholdReached: boolean;
   winnerIndexes: number[];
+  /** Highest score(s) when game has ended */
+  loserIndexes: number[];
 }

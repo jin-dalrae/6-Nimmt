@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { AI_STYLES, type AiStyle } from "../game/ai";
 import type { LobbyPlayer } from "../game/protocol";
 
@@ -39,10 +41,13 @@ export function Lobby({
     typeof window !== "undefined"
       ? `${window.location.origin}${window.location.pathname}?room=${roomId}`
       : roomId;
+  const [copied, setCopied] = useState(false);
 
   async function copyLink() {
     try {
       await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
     } catch {
       // ignore
     }
@@ -52,15 +57,33 @@ export function Lobby({
     <div className="felt-panel w-full max-w-lg p-6 sm:p-8">
       <div className="mb-6 text-center">
         <p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">Room code</p>
-        <p className="mt-1 font-mono text-4xl font-bold tracking-widest text-amber-300">
-          {roomId}
-        </p>
+        <div className="mt-3 flex flex-col items-center gap-4 sm:flex-row sm:justify-center sm:gap-6">
+          <div>
+            <p className="font-mono text-4xl font-bold tracking-widest text-amber-300 sm:text-5xl">
+              {roomId}
+            </p>
+            <p className="mt-2 max-w-[14rem] break-all text-[0.7rem] leading-snug text-emerald-100/45">
+              Scan to join · or enter the code
+            </p>
+          </div>
+          <div className="rounded-2xl bg-white p-3 shadow-lg ring-1 ring-black/10">
+            <QRCodeSVG
+              value={shareUrl}
+              size={148}
+              level="M"
+              marginSize={1}
+              bgColor="#ffffff"
+              fgColor="#0f172a"
+              title={`Join room ${roomId}`}
+            />
+          </div>
+        </div>
         <button
           type="button"
           onClick={copyLink}
-          className="mt-3 rounded-full border border-white/15 bg-white/5 px-4 py-1.5 text-sm text-emerald-100 hover:bg-white/10"
+          className="mt-4 rounded-full border border-white/15 bg-white/5 px-4 py-1.5 text-sm text-emerald-100 hover:bg-white/10"
         >
-          Copy invite link
+          {copied ? "Link copied!" : "Copy invite link"}
         </button>
       </div>
 
