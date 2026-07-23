@@ -386,6 +386,13 @@ function App() {
             >
               New random room
             </button>
+            <a
+              href="/mrjack"
+              className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl border border-violet-400/50 bg-violet-500/15 px-4 py-3 font-semibold text-violet-50 hover:bg-violet-500/25"
+            >
+              Play Mr. Jack <span aria-hidden>🕵️</span>
+              <span className="text-xs font-normal text-violet-200/70">local / vs AI</span>
+            </a>
           </div>
 
           {recentRooms.length > 0 ? (
@@ -495,6 +502,18 @@ function App() {
         </div>
       ) : null}
 
+      {/* Always-visible game switcher at bottom of main shell (home + lobby) */}
+      {screen !== "room" || status === "lobby" ? (
+        <div className="mx-auto mt-8 w-full max-w-md px-0">
+          <a
+            href="/mrjack"
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-violet-400/50 bg-violet-500/15 px-5 py-3.5 text-sm font-semibold text-violet-50 hover:bg-violet-500/25"
+          >
+            Play Mr. Jack <span aria-hidden>🕵️</span>
+          </a>
+        </div>
+      ) : null}
+
       {screen === "room" && !joined ? (
         <div className="mx-auto w-full max-w-md felt-panel p-6 text-center">
           <p className="text-emerald-100/80">
@@ -595,19 +614,11 @@ function App() {
 
       <footer
         className={`mt-auto text-center ${
-          isPlaying ? "hidden pb-2 pt-4 sm:block sm:pt-6" : "pt-10 pb-6"
+          isPlaying ? "hidden pb-2 pt-4 sm:block sm:pt-6" : "pt-6 pb-6"
         }`}
       >
-        {!isPlaying ? (
-          <a
-            href="/mrjack"
-            className="mb-4 inline-flex items-center justify-center gap-2 rounded-xl border border-violet-400/50 bg-violet-500/15 px-5 py-3 text-sm font-semibold text-violet-50 hover:bg-violet-500/25"
-          >
-            Play Mr. Jack <span aria-hidden>🕵️</span>
-          </a>
-        ) : null}
         <p className="text-xs text-emerald-100/40">
-          SFboardgames · 6 Nimmt! fan project · not affiliated with Amigo Spiele
+          SFboardgames · fan project · not affiliated with publishers
         </p>
       </footer>
     </div>
@@ -615,8 +626,21 @@ function App() {
 }
 
 function Root() {
-  const path = window.location.pathname.replace(/\/+$/, "") || "/";
-  if (path === "/mrjack" || path.endsWith("/mrjack")) {
+  // Support /mrjack, /mrjack/, and ?game=mrjack (cache-bust friendly)
+  const path = (window.location.pathname.replace(/\/+$/, "") || "/").toLowerCase();
+  const q = new URLSearchParams(window.location.search).get("game");
+  const isMrJack =
+    path === "/mrjack" ||
+    path.endsWith("/mrjack") ||
+    q === "mrjack";
+
+  useEffect(() => {
+    document.title = isMrJack
+      ? "SFboardgames · Mr. Jack"
+      : "SFboardgames · 6 Nimmt!";
+  }, [isMrJack]);
+
+  if (isMrJack) {
     return <MrJackApp />;
   }
   return <App />;
