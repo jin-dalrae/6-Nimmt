@@ -57,12 +57,15 @@ type RoomPlayer = {
   isBot: boolean;
   /** Per-bot level; falls back to room.aiStyle */
   aiStyle?: AiStyle;
+  /** Opaque client secret — reclaim this seat after reconnect (humans only) */
+  sessionToken?: string;
 };
 
 type Spectator = {
   id: string;
   name: string;
   connectionId: string | null;
+  sessionToken?: string;
 };
 
 type RoomData = {
@@ -329,6 +332,24 @@ export class GameRoom extends Server<Env> {
     return true;
   }
 
+  private ensureSessionToken(seat: {
+    sessionToken?: string;
+    isBot?: boolean;
+  }): string {
+    if (!seat.sessionToken) seat.sessionToken = crypto.randomUUID();
+    return seat.sessionToken;
+  }
+
+  private sessionTokenFor(
+    youId: string,
+    youRole: "player" | "spectator",
+  ): string | undefined {
+    if (youRole === "player") {
+      return this.room.players.find((x) => x.id === youId)?.sessionToken;
+    }
+    return this.room.spectators.find((x) => x.id === youId)?.sessionToken;
+  }
+
   private sendRoom(
     conn: Connection,
     youId: string,
@@ -347,6 +368,7 @@ export class GameRoom extends Server<Env> {
       hasAiKey: Boolean(this.apiKey()),
       aiStyle: this.room.aiStyle,
       tightDeck: this.room.tightDeck,
+      sessionToken: this.sessionTokenFor(youId, youRole),
     });
   }
 
@@ -599,7 +621,7 @@ export class GameRoom extends Server<Env> {
     try {
       switch (msg.type) {
         case "join":
-          await this.handleJoin(connection, msg.name);
+          await this.handleJoin(connection, msg.name, msg.sessionToken);
           break;
         case "start":
           await this.handleStart(connection, msg.tightDeck);
@@ -684,12 +706,45 @@ export class GameRoom extends Server<Env> {
     this.broadcastRoom();
   }
 
-  private async handleJoin(connection: Connection, rawName: string) {
+  private async bindSeat(
+    connection: Connection,
+    seat: { id: string; name: string; connectionId: string | null; sessionToken?: string },
+    role: "player" | "spectator",
+    toast?: string,
+  ) {
+    this.detachConnection(seat.connectionId);
+    seat.connectionId = connection.id;
+    this.ensureSessionToken(seat);
+    if (role === "player") {
+      this.room.spectators = this.room.spectators.filter((s) => s.id !== seat.id);
+    }
+    connection.setState({
+      playerId: seat.id,
+      name: seat.name,
+      role,
+    } satisfies ConnState);
+    await this.clearAbandonTracking();
+    await this.persist();
+    this.broadcastRoom();
+    if (this.room.game) this.pushGameState();
+    if (toast) this.send(connection, { type: "toast", message: toast });
+  }
+
+  private async handleJoin(
+    connection: Connection,
+    rawName: string,
+    sessionToken?: string,
+  ) {
     const name = rawName.trim().slice(0, 20);
     if (!name) {
       this.send(connection, { type: "error", message: "Enter a name" });
       return;
     }
+
+    const token =
+      typeof sessionToken === "string" && sessionToken.length >= 8
+        ? sessionToken.trim()
+        : "";
 
     // Ghost games past grace should not block rejoin; active seats stay reserved
     await this.resetAbandonedGame("soft");
@@ -697,35 +752,78 @@ export class GameRoom extends Server<Env> {
     // Already joined on this socket
     const existingPlayer = this.room.players.find((p) => p.connectionId === connection.id);
     if (existingPlayer) {
+      // Allow renaming display name while keeping seat
+      if (name && name !== existingPlayer.name) {
+        const clash = this.nameTaken(name, existingPlayer.id);
+        if (!clash) existingPlayer.name = name;
+      }
+      this.ensureSessionToken(existingPlayer);
       connection.setState({
         playerId: existingPlayer.id,
         name: existingPlayer.name,
         role: "player",
       } satisfies ConnState);
+      await this.persist();
       this.sendRoom(connection, existingPlayer.id, "player");
       if (this.room.game) this.pushGameState();
       return;
     }
     const existingSpec = this.room.spectators.find((s) => s.connectionId === connection.id);
     if (existingSpec) {
+      if (name && name !== existingSpec.name) {
+        const clash = this.nameTaken(name, existingSpec.id);
+        if (!clash) existingSpec.name = name;
+      }
+      this.ensureSessionToken(existingSpec);
       connection.setState({
         playerId: existingSpec.id,
         name: existingSpec.name,
         role: "spectator",
       } satisfies ConnState);
+      await this.persist();
       this.sendRoom(connection, existingSpec.id, "spectator");
       if (this.room.game) this.pushGameState();
       return;
     }
 
+    // 1) Prefer opaque session token (device reconnect) — not IP/fingerprint
+    if (token) {
+      const byTokenPlayer = this.room.players.find(
+        (p) => !p.isBot && p.sessionToken === token,
+      );
+      if (byTokenPlayer) {
+        // Optional display-name update if free
+        if (name !== byTokenPlayer.name && !this.nameTaken(name, byTokenPlayer.id)) {
+          byTokenPlayer.name = name;
+        }
+        await this.bindSeat(
+          connection,
+          byTokenPlayer,
+          "player",
+          this.room.status === "lobby"
+            ? `Rejoined room ${this.name}`
+            : "Reconnected to your seat",
+        );
+        return;
+      }
+      const byTokenSpec = this.room.spectators.find((s) => s.sessionToken === token);
+      if (byTokenSpec) {
+        if (name !== byTokenSpec.name && !this.nameTaken(name, byTokenSpec.id)) {
+          byTokenSpec.name = name;
+        }
+        await this.bindSeat(connection, byTokenSpec, "spectator", "Back to watching");
+        return;
+      }
+      // Stale token (room wiped / leave) — fall through as a fresh join
+    }
+
     const nameKey = name.toLowerCase();
 
-    // Same name as a human seat → reclaim (also after refresh while old socket lingers)
+    // 2) Same name as a human seat → reclaim only if offline (or no live socket)
     const sameSeat = this.room.players.find(
       (p) => !p.isBot && p.name.toLowerCase() === nameKey,
     );
     if (sameSeat) {
-      // Someone else is live on that name — don't steal a real second person
       if (
         sameSeat.connectionId &&
         sameSeat.connectionId !== connection.id &&
@@ -737,25 +835,16 @@ export class GameRoom extends Server<Env> {
         });
         return;
       }
-      this.detachConnection(sameSeat.connectionId);
-      sameSeat.connectionId = connection.id;
-      this.room.spectators = this.room.spectators.filter((s) => s.id !== sameSeat.id);
-      connection.setState({
-        playerId: sameSeat.id,
-        name: sameSeat.name,
-        role: "player",
-      } satisfies ConnState);
-      await this.clearAbandonTracking();
-      await this.persist();
-      this.broadcastRoom();
-      if (this.room.game) this.pushGameState();
-      this.send(connection, {
-        type: "toast",
-        message:
-          this.room.status === "lobby"
-            ? `Rejoined room ${this.name}`
-            : "Reconnected to your seat",
-      });
+      // If seat has a different live token holder offline, name reclaim is still OK
+      // (they left the tab). Issue/keep token for this client.
+      await this.bindSeat(
+        connection,
+        sameSeat,
+        "player",
+        this.room.status === "lobby"
+          ? `Rejoined room ${this.name}`
+          : "Reconnected to your seat",
+      );
       return;
     }
 
@@ -785,18 +874,7 @@ export class GameRoom extends Server<Env> {
         });
         return;
       }
-      this.detachConnection(sameSpec.connectionId);
-      sameSpec.connectionId = connection.id;
-      connection.setState({
-        playerId: sameSpec.id,
-        name: sameSpec.name,
-        role: "spectator",
-      } satisfies ConnState);
-      await this.clearAbandonTracking();
-      await this.persist();
-      this.broadcastRoom();
-      if (this.room.game) this.pushGameState();
-      this.send(connection, { type: "toast", message: "Back to watching" });
+      await this.bindSeat(connection, sameSpec, "spectator", "Back to watching");
       return;
     }
 
@@ -808,8 +886,15 @@ export class GameRoom extends Server<Env> {
       }
 
       const id = crypto.randomUUID();
-      this.room.spectators.push({ id, name, connectionId: connection.id });
+      const session = crypto.randomUUID();
+      this.room.spectators.push({
+        id,
+        name,
+        connectionId: connection.id,
+        sessionToken: session,
+      });
       connection.setState({ playerId: id, name, role: "spectator" } satisfies ConnState);
+      await this.clearAbandonTracking();
       await this.persist();
       this.broadcastRoom();
       if (this.room.game) this.pushGameState();
@@ -834,7 +919,14 @@ export class GameRoom extends Server<Env> {
     }
 
     const id = crypto.randomUUID();
-    this.room.players.push({ id, name, connectionId: connection.id, isBot: false });
+    const session = crypto.randomUUID();
+    this.room.players.push({
+      id,
+      name,
+      connectionId: connection.id,
+      isBot: false,
+      sessionToken: session,
+    });
     if (!this.room.hostId || this.room.players.find((p) => p.id === this.room.hostId)?.isBot) {
       this.room.hostId = id;
     }
@@ -1134,6 +1226,7 @@ export class GameRoom extends Server<Env> {
         name: s.name,
         connectionId: s.connectionId,
         isBot: false,
+        sessionToken: s.sessionToken,
       });
       promoted.push(s.id);
     }
@@ -1189,9 +1282,12 @@ export class GameRoom extends Server<Env> {
           null;
       }
     } else {
-      // Mid-game: keep seat for possible rejoin by name; only free room if no humans left
+      // Explicit Leave mid-game: drop socket + invalidate token (no auto-reclaim)
       const p = this.room.players.find((x) => x.id === playerId);
-      if (p && !p.isBot) p.connectionId = null;
+      if (p && !p.isBot) {
+        p.connectionId = null;
+        p.sessionToken = undefined;
+      }
       if (this.connectedHumansCount() === 0) {
         await this.resetAbandonedGame("force");
       }

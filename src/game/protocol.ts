@@ -4,7 +4,8 @@ import type { AiStyle } from "./ai";
 export type { AiStyle };
 
 export type ClientMessage =
-  | { type: "join"; name: string }
+  /** sessionToken: opaque seat key from a prior join (localStorage) — preferred over name for reconnect */
+  | { type: "join"; name: string; sessionToken?: string }
   | { type: "start"; tightDeck?: boolean }
   | { type: "setTightDeck"; tightDeck: boolean }
   | { type: "addBots"; count?: number }
@@ -52,6 +53,11 @@ export type ServerMessage =
       aiStyle: AiStyle;
       /** Lobby preference: use 1…(10n+4) deck when the game starts */
       tightDeck: boolean;
+      /**
+       * Opaque seat/session key for this client only (when youId is set).
+       * Store per room and send back on join to reclaim the seat after disconnect.
+       */
+      sessionToken?: string;
     }
   | {
       type: "state";

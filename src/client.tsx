@@ -17,6 +17,11 @@ import {
   type RecentRoom,
   type RoomPresenceInfo,
 } from "./game/recentRooms";
+import {
+  clearSessionToken,
+  loadSessionToken,
+  saveSessionToken,
+} from "./game/sessionToken";
 import type { PublicGameState } from "./game/types";
 import { Lobby } from "./components/Lobby";
 import { GameBoard } from "./components/GameBoard";
@@ -107,6 +112,10 @@ function App() {
             if (msg.status === "lobby") {
               setGame(null);
             }
+            // Persist seat token for this room so reconnect reclaims without IP/device hacks
+            if (msg.sessionToken && msg.roomId) {
+              saveSessionToken(msg.roomId, msg.sessionToken);
+            }
           }
           break;
         case "state":
@@ -153,12 +162,22 @@ function App() {
     [socket],
   );
 
-  // Join (and re-join after every reconnect) while in a room
+  const sendJoin = useCallback(() => {
+    if (!activeRoom || !name.trim()) return;
+    const sessionToken = loadSessionToken(activeRoom);
+    send({
+      type: "join",
+      name: name.trim(),
+      ...(sessionToken ? { sessionToken } : {}),
+    });
+  }, [activeRoom, name, send]);
+
+  // Join (and re-join after every reconnect) while in a room — token reclaims seat
   useEffect(() => {
     if (screen !== "room" || !activeRoom || !connected) return;
     if (!name.trim()) return;
-    send({ type: "join", name: name.trim() });
-  }, [screen, activeRoom, connected, name, send]);
+    sendJoin();
+  }, [screen, activeRoom, connected, name, sendJoin]);
 
   // Solo mode: after join as host, auto-add bots
   useEffect(() => {
@@ -169,14 +188,12 @@ function App() {
     setPendingSoloBots(0);
   }, [joined, youId, hostId, pendingSoloBots, status, send]);
 
-  // When the tab wakes, re-claim seat (mobile/desktop idle often drops the socket)
+  // When the tab wakes, re-claim seat via session token
   useEffect(() => {
     if (screen !== "room" || !activeRoom || !name.trim()) return;
     const rejoin = () => {
       if (document.visibilityState !== "visible") return;
-      if (socket.readyState === WebSocket.OPEN) {
-        send({ type: "join", name: name.trim() });
-      }
+      if (socket.readyState === WebSocket.OPEN) sendJoin();
     };
     document.addEventListener("visibilitychange", rejoin);
     window.addEventListener("online", rejoin);
@@ -184,7 +201,7 @@ function App() {
       document.removeEventListener("visibilitychange", rejoin);
       window.removeEventListener("online", rejoin);
     };
-  }, [screen, activeRoom, name, send, socket]);
+  }, [screen, activeRoom, name, sendJoin, socket]);
 
   // Remember room once successfully joined
   useEffect(() => {
@@ -277,6 +294,7 @@ function App() {
   function leaveRoom() {
     allowHistoryBack.current = true;
     send({ type: "leave" });
+    if (activeRoom) clearSessionToken(activeRoom);
     setScreen("home");
     setActiveRoom("");
     setJoined(false);
