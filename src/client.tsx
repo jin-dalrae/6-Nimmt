@@ -386,13 +386,6 @@ function App() {
             >
               New random room
             </button>
-            <a
-              href="/mrjack"
-              className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl border border-violet-400/50 bg-violet-500/15 px-4 py-3 font-semibold text-violet-50 hover:bg-violet-500/25"
-            >
-              Play Mr. Jack <span aria-hidden>🕵️</span>
-              <span className="text-xs font-normal text-violet-200/70">local / vs AI</span>
-            </a>
           </div>
 
           {recentRooms.length > 0 ? (
@@ -502,8 +495,8 @@ function App() {
         </div>
       ) : null}
 
-      {/* Always-visible game switcher at bottom of main shell (home + lobby) */}
-      {screen !== "room" || status === "lobby" ? (
+      {/* Single Mr. Jack entry — bottom of home only */}
+      {screen === "home" ? (
         <div className="mx-auto mt-8 w-full max-w-md px-0">
           <a
             href="/mrjack"
