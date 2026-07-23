@@ -135,6 +135,10 @@ function App() {
       setConnected(true);
     },
     onClose() {
+      // Keep joined/game UI — PartySocket will reconnect; we re-claim the seat on open
+      setConnected(false);
+    },
+    onError() {
       setConnected(false);
     },
     onMessage,
@@ -149,12 +153,12 @@ function App() {
     [socket],
   );
 
-  // Join once connected to room
+  // Join (and re-join after every reconnect) while in a room
   useEffect(() => {
-    if (screen !== "room" || !activeRoom || !connected || joined) return;
+    if (screen !== "room" || !activeRoom || !connected) return;
     if (!name.trim()) return;
     send({ type: "join", name: name.trim() });
-  }, [screen, activeRoom, connected, joined, name, send]);
+  }, [screen, activeRoom, connected, name, send]);
 
   // Solo mode: after join as host, auto-add bots
   useEffect(() => {
@@ -164,6 +168,23 @@ function App() {
     send({ type: "addBots", count: pendingSoloBots });
     setPendingSoloBots(0);
   }, [joined, youId, hostId, pendingSoloBots, status, send]);
+
+  // When the tab wakes, re-claim seat (mobile/desktop idle often drops the socket)
+  useEffect(() => {
+    if (screen !== "room" || !activeRoom || !name.trim()) return;
+    const rejoin = () => {
+      if (document.visibilityState !== "visible") return;
+      if (socket.readyState === WebSocket.OPEN) {
+        send({ type: "join", name: name.trim() });
+      }
+    };
+    document.addEventListener("visibilitychange", rejoin);
+    window.addEventListener("online", rejoin);
+    return () => {
+      document.removeEventListener("visibilitychange", rejoin);
+      window.removeEventListener("online", rejoin);
+    };
+  }, [screen, activeRoom, name, send, socket]);
 
   // Remember room once successfully joined
   useEffect(() => {
@@ -324,6 +345,12 @@ function App() {
       {toast ? (
         <div className="toast fixed bottom-[calc(11rem+env(safe-area-inset-bottom,0px))] left-1/2 z-50 max-w-[90vw] -translate-x-1/2 rounded-full bg-slate-900/95 px-4 py-2 text-center text-sm text-amber-100 shadow-xl ring-1 ring-white/10 lg:bottom-6">
           {toast}
+        </div>
+      ) : null}
+
+      {screen === "room" && !connected ? (
+        <div className="mx-auto mb-2 w-full max-w-md rounded-lg border border-amber-400/40 bg-amber-950/50 px-3 py-1.5 text-center text-[0.7rem] font-medium text-amber-100">
+          Connection lost — reconnecting and reclaiming your seat…
         </div>
       ) : null}
 

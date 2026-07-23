@@ -76,7 +76,15 @@ type RoomData = {
   aiStyle: AiStyle;
   /** Use cards 1…(10×players+4) instead of full 1–104 */
   tightDeck: boolean;
+  /**
+   * When the last human's socket dropped mid-game. Game is kept for a grace
+   * period so idle tab / brief network drops can reconnect without wiping.
+   */
+  abandonedAt: number | null;
 };
+
+/** Keep in-progress games alive after a disconnect (phones idle, WS blips). */
+const ABANDON_GRACE_MS = 10 * 60 * 1000;
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -98,6 +106,7 @@ export class GameRoom extends Server<Env> {
     seats: [],
     aiStyle: "solid",
     tightDeck: true,
+    abandonedAt: null,
   };
 
   private botsBusy = false;
@@ -107,17 +116,41 @@ export class GameRoom extends Server<Env> {
   async onStart() {
     const saved = await this.ctx.storage.get<RoomData>("room");
     if (saved) {
-      // Migrate older rooms missing isBot / aiStyle / spectators
+      // Migrate older rooms missing isBot / aiStyle / spectators / abandonedAt
       this.room = {
         ...saved,
         aiStyle: isAiStyle(saved.aiStyle) ? saved.aiStyle : "solid",
         tightDeck: typeof saved.tightDeck === "boolean" ? saved.tightDeck : true,
         spectators: Array.isArray(saved.spectators) ? saved.spectators : [],
+        abandonedAt:
+          typeof saved.abandonedAt === "number" ? saved.abandonedAt : null,
         players: saved.players.map((p) => ({
           ...p,
           isBot: "isBot" in p ? Boolean((p as RoomPlayer).isBot) : false,
         })),
       };
+    }
+  }
+
+  /** Alarm: wipe games only after the reconnect grace period. */
+  async onAlarm() {
+    const wiped = await this.resetAbandonedGame("alarm");
+    if (wiped) {
+      this.broadcastRoom();
+    }
+  }
+
+  private async scheduleAbandonCheck() {
+    // Wake after grace; onAlarm re-checks before wiping
+    await this.ctx.storage.setAlarm(Date.now() + ABANDON_GRACE_MS);
+  }
+
+  private async clearAbandonTracking() {
+    this.room.abandonedAt = null;
+    try {
+      await this.ctx.storage.deleteAlarm();
+    } catch {
+      // no alarm set
     }
   }
 
@@ -153,8 +186,8 @@ export class GameRoom extends Server<Env> {
    * (no WebSocket join required).
    */
   async onRequest(_request: Request): Promise<Response> {
-    // Free abandoned ghost games so “previous rooms” shows accurate status
-    await this.resetAbandonedGame();
+    // Soft only — presence polls must not kill a game during reconnect grace
+    await this.resetAbandonedGame("soft");
     return Response.json(this.presence(), {
       headers: {
         "Cache-Control": "no-store",
@@ -242,24 +275,56 @@ export class GameRoom extends Server<Env> {
   }
 
   /**
-   * If a game was left running with nobody human online (solo tab closed,
-   * everyone disconnected), clear it so the room is joinable again.
+   * Clear a game with no humans online so the room is joinable again.
    * Bots alone do not keep a game "locked".
+   *
+   * - "soft" (default): only wipe after ABANDON_GRACE_MS (reconnect window).
+   * - "force": wipe now (explicit Leave as last human).
+   * - "alarm": wipe if still empty after grace.
    */
-  private async resetAbandonedGame(): Promise<boolean> {
-    if (this.room.status === "lobby") return false;
-    if (this.connectedHumansCount() > 0) return false;
+  private async resetAbandonedGame(
+    mode: "soft" | "force" | "alarm" = "soft",
+  ): Promise<boolean> {
+    if (this.room.status === "lobby") {
+      await this.clearAbandonTracking();
+      return false;
+    }
+    if (this.connectedHumansCount() > 0) {
+      await this.clearAbandonTracking();
+      return false;
+    }
+
+    if (mode !== "force") {
+      const now = Date.now();
+      if (this.room.abandonedAt == null) {
+        this.room.abandonedAt = now;
+        await this.persist();
+        await this.scheduleAbandonCheck();
+        return false;
+      }
+      if (now - this.room.abandonedAt < ABANDON_GRACE_MS) {
+        // Ensure an alarm will finish the job
+        await this.scheduleAbandonCheck();
+        return false;
+      }
+    }
 
     this.room.status = "lobby";
     this.room.game = null;
     this.room.seats = [];
     this.room.spectators = [];
+    this.room.abandonedAt = null;
     // Drop ghost humans; keep bots for a quick rematch if desired
     this.room.players = this.room.players.filter((p) => p.isBot);
     this.room.hostId =
       this.room.players.find((p) => !p.isBot)?.id ??
       this.room.players[0]?.id ??
       null;
+    try {
+      await this.ctx.storage.deleteAlarm();
+    } catch {
+      // ignore
+    }
     await this.persist();
     return true;
   }
@@ -500,8 +565,8 @@ export class GameRoom extends Server<Env> {
   }
 
   async onConnect(connection: Connection) {
-    // Don't lock the room behind a ghost game with zero humans
-    await this.resetAbandonedGame();
+    // Only free rooms abandoned past the reconnect grace (never wipe live seats)
+    await this.resetAbandonedGame("soft");
 
     this.send(connection, {
       type: "room",
@@ -586,8 +651,9 @@ export class GameRoom extends Server<Env> {
     if (st.role === "spectator") {
       const spec = this.room.spectators.find((s) => s.id === playerId);
       if (spec && spec.connectionId === connection.id) {
-        // Drop disconnected spectators (they aren't mid-hand)
-        this.room.spectators = this.room.spectators.filter((s) => s.id !== playerId);
+        // Keep spectator slot briefly so refresh/reconnect can reclaim by name;
+        // only clear the live socket (drop fully if still gone after grace via soft reset path)
+        spec.connectionId = null;
       }
     } else {
       const player = this.room.players.find((p) => p.id === playerId);
@@ -608,9 +674,10 @@ export class GameRoom extends Server<Env> {
           this.room.players[0]?.id ??
           null;
       }
-    } else {
-      // Last human left mid-game → free the room
-      await this.resetAbandonedGame();
+    } else if (this.connectedHumansCount() === 0) {
+      // Idle / network drop — keep the game for ABANDON_GRACE_MS so they can rejoin
+      this.room.abandonedAt = Date.now();
+      await this.scheduleAbandonCheck();
     }
 
     await this.persist();
@@ -624,8 +691,8 @@ export class GameRoom extends Server<Env> {
       return;
     }
 
-    // Ghost games (bots only / everyone disconnected) should not block rejoin
-    await this.resetAbandonedGame();
+    // Ghost games past grace should not block rejoin; active seats stay reserved
+    await this.resetAbandonedGame("soft");
 
     // Already joined on this socket
     const existingPlayer = this.room.players.find((p) => p.connectionId === connection.id);
@@ -678,6 +745,7 @@ export class GameRoom extends Server<Env> {
         name: sameSeat.name,
         role: "player",
       } satisfies ConnState);
+      await this.clearAbandonTracking();
       await this.persist();
       this.broadcastRoom();
       if (this.room.game) this.pushGameState();
@@ -724,6 +792,7 @@ export class GameRoom extends Server<Env> {
         name: sameSpec.name,
         role: "spectator",
       } satisfies ConnState);
+      await this.clearAbandonTracking();
       await this.persist();
       this.broadcastRoom();
       if (this.room.game) this.pushGameState();
@@ -1120,9 +1189,12 @@ export class GameRoom extends Server<Env> {
           null;
       }
     } else {
+      // Mid-game: keep seat for possible rejoin by name; only free room if no humans left
       const p = this.room.players.find((x) => x.id === playerId);
       if (p && !p.isBot) p.connectionId = null;
-      await this.resetAbandonedGame();
+      if (this.connectedHumansCount() === 0) {
+        await this.resetAbandonedGame("force");
+      }
     }
 
     connection.setState(null);
