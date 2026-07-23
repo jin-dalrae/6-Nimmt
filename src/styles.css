@@ -291,6 +291,9 @@ input {
   gap: 0.35rem;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  /* Horizontal hand browse should not trigger browser back / page swipe */
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
   padding: 0.35rem 0.15rem 0.35rem;
   scrollbar-width: thin;
 }
@@ -340,6 +343,26 @@ input {
 
   .play-shell--with-hand {
     padding-bottom: 0.5rem;
+  }
+}
+
+/* Brief pulse when a row-take alert lands in the status pill */
+.status-alert--hit {
+  animation: status-hit-flash 0.55s ease;
+}
+
+@keyframes status-hit-flash {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.45);
+  }
+  40% {
+    transform: scale(1.03);
+    box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.2);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 transparent;
   }
 }
 
@@ -407,6 +430,8 @@ input {
 .app-shell--playing {
   padding-top: max(0.75rem, var(--safe-top));
   padding-bottom: 0;
+  /* Reduce edge-swipe back fighting the hand */
+  overscroll-behavior-x: none;
 }
 
 .header--compact {

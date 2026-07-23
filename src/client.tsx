@@ -1,6 +1,6 @@
 import "./styles.css";
 import { createRoot } from "react-dom/client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePartySocket } from "partysocket/react";
 import type {
   AiStyle,
@@ -70,6 +70,8 @@ function App() {
   const [recentRooms, setRecentRooms] = useState<RecentRoom[]>(() => loadRecentRooms());
   const [presence, setPresence] = useState<Record<string, RoomPresenceInfo>>({});
   const [presenceLoading, setPresenceLoading] = useState(false);
+  /** Allow one history back when leaving via Leave button */
+  const allowHistoryBack = useRef(false);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -196,6 +198,30 @@ function App() {
     };
   }, [screen, recentRooms]);
 
+  // Block browser / swipe-back while in a room (esp. when scrolling the hand)
+  useEffect(() => {
+    if (screen !== "room" || !activeRoom) return;
+
+    const guard = { sfbgGuard: true as const, room: activeRoom };
+    // Extra history entry so the first Back is trapped in-room
+    window.history.pushState(guard, "", window.location.href);
+
+    const onPopState = () => {
+      if (allowHistoryBack.current) {
+        allowHistoryBack.current = false;
+        return;
+      }
+      // Stay in the room
+      window.history.pushState(guard, "", window.location.href);
+      showToast("Use Leave to exit — back is blocked while in a room");
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+    };
+  }, [screen, activeRoom, showToast]);
+
   function enterRoom(code: string, soloBots = 0) {
     const room = code.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 5);
     if (room.length < 4) {
@@ -221,10 +247,11 @@ function App() {
     setRecentRooms(rememberRoom(room));
     const url = new URL(window.location.href);
     url.searchParams.set("room", room);
-    window.history.replaceState({}, "", url.toString());
+    window.history.replaceState({ sfbgRoom: room }, "", url.toString());
   }
 
   function leaveRoom() {
+    allowHistoryBack.current = true;
     send({ type: "leave" });
     setScreen("home");
     setActiveRoom("");
@@ -237,6 +264,7 @@ function App() {
     setRecentRooms(loadRecentRooms());
     const url = new URL(window.location.href);
     url.searchParams.delete("room");
+    // Drop the guard entry if present, then show home
     window.history.replaceState({}, "", url.toString());
   }
 
@@ -496,6 +524,7 @@ function App() {
           spectators={spectators}
           onChoose={(cardNumber) => send({ type: "chooseCard", cardNumber })}
           onPlace={(row, replace) => send({ type: "placeCard", row, replace })}
+          onSwapCard={(cardNumber) => send({ type: "swapCard", cardNumber })}
           onRestart={() => send({ type: "restart" })}
         />
       ) : null}

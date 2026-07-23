@@ -230,11 +230,49 @@ function switchToNextPlayer(G: GameState): GameState {
     return G;
   }
 
+  // Only the current lowest card should have place moves
+  for (const pl of G.players) {
+    pl.availableMoves = null;
+  }
+
   const remaining = G.players.filter((pl) => pl.faceDownCard);
   const lowest = Math.min(...remaining.map((pl) => pl.faceDownCard!.number));
   const player = G.players.find((pl) => pl.faceDownCard?.number === lowest)!;
   player.availableMoves = availableMoves(G, player);
   return G;
+}
+
+/**
+ * House rule: when your revealed card is too low for every row (must take a
+ * row), you may put it back and play a different card from hand instead.
+ * Placement order is recalculated among remaining face-down cards.
+ */
+export function swapForcedCard(
+  G: GameState,
+  playerNumber: number,
+  newCardNumber: number,
+): GameState {
+  assert(G.phase === Phase.PlaceCard, "Can only change card while placing");
+  const player = G.players[playerNumber];
+  assert(player?.faceDownCard, "You have no card in play");
+
+  const placeOpts = player.availableMoves?.[MoveName.PlaceCard] ?? [];
+  assert(
+    placeOpts.length > 1 && placeOpts.every((m) => m.replace),
+    "You can only switch cards when forced to take a row",
+  );
+
+  const handIdx = player.hand.findIndex((c) => c.number === newCardNumber);
+  assert(handIdx >= 0, "That card is not in your hand");
+
+  const old = player.faceDownCard;
+  const next = player.hand[handIdx];
+  player.hand.splice(handIdx, 1);
+  player.hand.push(old);
+  player.faceDownCard = next;
+  player.availableMoves = null;
+
+  return switchToNextPlayer(G);
 }
 
 /**

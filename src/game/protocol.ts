@@ -11,6 +11,8 @@ export type ClientMessage =
   | { type: "setAiStyle"; style: AiStyle }
   | { type: "chooseCard"; cardNumber: number }
   | { type: "placeCard"; row: number; replace: boolean }
+  /** When forced to take a row: put current card back and play another */
+  | { type: "swapCard"; cardNumber: number }
   | { type: "restart" }
   | { type: "leave" };
 

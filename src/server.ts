@@ -18,6 +18,7 @@ import {
   ended,
   move,
   setup,
+  swapForcedCard,
   toPublicState,
 } from "./game/engine";
 import type { GameState } from "./game/types";
@@ -95,6 +96,8 @@ export class GameRoom extends Server<Env> {
   };
 
   private botsBusy = false;
+  /** Set when a human acts while bots are mid-async; triggers another runBots pass */
+  private botsNeedRerun = false;
 
   async onStart() {
     const saved = await this.ctx.storage.get<RoomData>("room");
@@ -308,10 +311,21 @@ export class GameRoom extends Server<Env> {
     await this.runBots();
   }
 
-  /** Let Gemini/heuristic bots act until humans must move. */
+  /**
+   * Let Gemini/heuristic bots act until humans must move.
+   *
+   * Important: after any `await` (sleep / Gemini), re-read `this.room.game`.
+   * Humans may have chosen/placed during the wait — applying bot moves on a
+   * stale clone would wipe their card selection.
+   */
   private async runBots() {
-    if (this.botsBusy || !this.room.game || this.room.status !== "playing") return;
+    if (this.botsBusy || !this.room.game || this.room.status !== "playing") {
+      // Someone else is mid-bot-turn; mark that we need another pass when free
+      if (this.botsBusy) this.botsNeedRerun = true;
+      return;
+    }
     this.botsBusy = true;
+    this.botsNeedRerun = false;
     const style = this.room.aiStyle;
     const pace = botPaceMs(style);
 
@@ -334,21 +348,28 @@ export class GameRoom extends Server<Env> {
 
           if (botIndexes.length === 0) break;
 
+          // Snapshot only for AI thinking (may be slightly stale; apply uses latest)
+          const thinkSnap = cloneGame(G);
           await sleep(pace);
 
-          // Bots choose in parallel (same board snapshot), then apply sequentially
           const picks = await Promise.all(
             botIndexes.map(async (i) => ({
               i,
-              card: await chooseCardForBot(cloneGame(G), i, this.apiKey(), style),
+              card: await chooseCardForBot(cloneGame(thinkSnap), i, this.apiKey(), style),
             })),
           );
 
-          let next = cloneGame(G);
+          // Re-read after async — humans may have locked in while bots thought
+          if (!this.room.game || this.room.status !== "playing") break;
+          if (this.room.game.phase !== Phase.ChooseCard) continue;
+
+          let next = cloneGame(this.room.game);
           for (const { i, card } of picks) {
-            // Re-validate against current next state
+            // Skip if this bot already has a card (or seat changed)
+            if (next.players[i]?.faceDownCard) continue;
+            if (!this.isBotSeat(i)) continue;
             const still = next.players[i].hand.find((c) => c.number === card.number);
-            if (!still || next.players[i].faceDownCard) continue;
+            if (!still) continue;
             next = move(next, { name: MoveName.ChooseCard, data: still }, i);
           }
 
@@ -378,17 +399,39 @@ export class GameRoom extends Server<Env> {
         );
         if (actor < 0) break;
 
+        const placeSnap = cloneGame(G);
         await sleep(Math.round(pace * 0.7));
 
         const choice = await placeRowForBot(
-          cloneGame(G),
+          cloneGame(placeSnap),
           actor,
           this.apiKey(),
           style,
         );
+
+        // Re-read after async — don't overwrite human place/choose
+        if (!this.room.game || this.room.status !== "playing") break;
+        if (this.room.game.phase !== Phase.PlaceCard) continue;
+
+        const live = this.room.game;
+        // Bot may no longer be the actor (human swap / place changed order)
+        if (
+          !this.isBotSeat(actor) ||
+          !live.players[actor]?.faceDownCard ||
+          !(live.players[actor].availableMoves?.[MoveName.PlaceCard]?.length)
+        ) {
+          continue;
+        }
+
+        const legal = live.players[actor].availableMoves![MoveName.PlaceCard]!;
+        const pick =
+          legal.find((m) => m.row === choice.row && m.replace === choice.replace) ??
+          legal[0];
+        if (!pick) continue;
+
         let next = move(
-          cloneGame(G),
-          { name: MoveName.PlaceCard, data: choice },
+          cloneGame(live),
+          { name: MoveName.PlaceCard, data: pick },
           actor,
         );
         next = autoPlaceIfPossible(next);
@@ -407,6 +450,12 @@ export class GameRoom extends Server<Env> {
       }
     } finally {
       this.botsBusy = false;
+    }
+
+    // Human acted while bots were busy — run again so bots catch up
+    if (this.botsNeedRerun) {
+      this.botsNeedRerun = false;
+      await this.runBots();
     }
   }
 
@@ -463,6 +512,9 @@ export class GameRoom extends Server<Env> {
           break;
         case "placeCard":
           await this.handlePlace(connection, msg.row, msg.replace);
+          break;
+        case "swapCard":
+          await this.handleSwapCard(connection, msg.cardNumber);
           break;
         case "restart":
           await this.handleRestart(connection);
@@ -810,6 +862,29 @@ export class GameRoom extends Server<Env> {
     );
     next = autoPlaceIfPossible(next);
     await this.applyAndContinue(next);
+  }
+
+  /** When forced to take a row: swap face-down card for another from hand */
+  private async handleSwapCard(connection: Connection, cardNumber: number) {
+    const playerId = (connection.state as ConnState | undefined)?.playerId;
+    if (!playerId || !this.room.game || this.room.status !== "playing") {
+      this.send(connection, { type: "error", message: "No active game" });
+      return;
+    }
+
+    const idx = this.seatIndex(playerId);
+    if (idx < 0) throw new Error("You are not in this game");
+    if (this.isBotSeat(idx)) throw new Error("Bots play themselves");
+
+    const who =
+      this.room.players.find((p) => p.id === playerId)?.name ?? "Player";
+    let next = swapForcedCard(cloneGame(this.room.game), idx, cardNumber);
+    next = autoPlaceIfPossible(next);
+    await this.applyAndContinue(next);
+    this.broadcastJson({
+      type: "toast",
+      message: `${who} switched to a different card`,
+    });
   }
 
   private async handleRestart(connection: Connection) {

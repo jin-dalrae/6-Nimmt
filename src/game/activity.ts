@@ -115,8 +115,8 @@ export function phaseStatus(game: PublicGameState): {
     const placeOpts = you?.availableMoves?.[MoveName.PlaceCard] ?? [];
     if (placeOpts.length > 1) {
       return {
-        headline: "Your card is too low — take a row",
-        detail: "Tap a row on the table (you score its bull heads).",
+        headline: "Card too low — take a row or switch card",
+        detail: "Tap a row to collect it, or pick another card from your hand.",
         tone: "hot",
       };
     }
@@ -149,6 +149,66 @@ function bullsWord(n: number): string {
   return n === 1 ? "1 🐂" : `${n} 🐂`;
 }
 
+/** Explain a row take: full row vs too-low, closest end, bulls. */
+function describeRowTake(
+  prev: PublicGameState,
+  playerPrev: PublicGameState["players"][0],
+  playerNext: PublicGameState["players"][0],
+  cardsTaken: number,
+  bulls: number,
+): string {
+  const name = who(playerNext);
+  const played =
+    playerPrev.faceDownCard && playerPrev.faceDownCard.number > 0
+      ? playerPrev.faceDownCard.number
+      : null;
+
+  let closestEnd: number | null = null;
+  let prevRowLen = 0;
+  let tooLow = false;
+  let fullRow = false;
+
+  if (played != null && prev.rows.length) {
+    const ends = prev.rows
+      .map((row) => row[row.length - 1]?.number)
+      .filter((n): n is number => n != null);
+    const lower = ends.filter((e) => e < played);
+    if (lower.length === 0) {
+      // Card lower than every row end → forced pick
+      tooLow = true;
+    } else {
+      // Legal attach: closest lower end
+      closestEnd = Math.max(...lower);
+      const row = prev.rows.find((r) => r[r.length - 1]?.number === closestEnd);
+      prevRowLen = row?.length ?? 0;
+      // 6th card on a full row
+      fullRow = prevRowLen >= 5;
+    }
+  }
+
+  // Full row: "#46 was closest to #43 but that row was full → 7 🐂"
+  if (played != null && fullRow && closestEnd != null) {
+    if (playerNext.isYou) {
+      return `Your #${played} was closest to #${closestEnd}, but that row was already full (${prevRowLen}/5) — you got ${bullsWord(bulls)}`;
+    }
+    return `${name} got ${bullsWord(bulls)} for a full row (#${played} closest to #${closestEnd})`;
+  }
+
+  // Too low for every row
+  if (played != null && tooLow) {
+    if (playerNext.isYou) {
+      return `Your #${played} was lower than every row — took ${cardsWord(cardsTaken)} for ${bullsWord(bulls)}`;
+    }
+    return `${name} got ${bullsWord(bulls)} taking a row (#${played} too low for every end)`;
+  }
+
+  // Fallback with card count + bulls
+  if (playerNext.isYou) {
+    return `You got ${cardsWord(cardsTaken)} for ${bullsWord(bulls)} · total ${playerNext.points} 🐂`;
+  }
+  return `${name} got ${bullsWord(bulls)} · total ${playerNext.points} 🐂`;
+}
+
 /**
  * Meaningful events only: who took how many cards / bull heads.
  * Skips noise (locked in, normal place on table).
@@ -170,7 +230,6 @@ export function diffActivity(
   }
 
   if (next.round !== prev.round) {
-    // End of previous deal summary if useful
     out.push({
       id: ts(),
       text: `${dealLabel(next)} — new hands (${trickLabel(next)})`,
@@ -188,19 +247,7 @@ export function diffActivity(
     const bulls = b.points - a.points;
 
     if (cardsTaken > 0 || bulls > 0) {
-      // Prefer discard delta; fall back to points-only if discard missing
-      const nCards = cardsTaken > 0 ? cardsTaken : null;
-      const name = who(b);
-      const verb = b.isYou ? "got" : "got";
-
-      let text: string;
-      if (nCards !== null && bulls > 0) {
-        text = `${name} ${verb} ${cardsWord(nCards)} (+${bullsWord(bulls)}) · total ${b.points} 🐂`;
-      } else if (nCards !== null) {
-        text = `${name} ${verb} ${cardsWord(nCards)} · total ${b.points} 🐂`;
-      } else {
-        text = `${name} scored +${bullsWord(bulls)} · total ${b.points} 🐂`;
-      }
+      const text = describeRowTake(prev, a, b, cardsTaken || 1, bulls > 0 ? bulls : 0);
 
       out.push({
         id: ts(),
@@ -212,19 +259,17 @@ export function diffActivity(
       if (a.points < thr && b.points >= thr && !next.ended) {
         out.push({
           id: ts(),
-          text: `${name} hit ${b.points} (≥${thr}) — finish this deal`,
+          text: `${who(b)} hit ${b.points} (≥${thr}) — finish this deal`,
           tone: "hot",
         });
       }
     }
   }
 
-  // End of a full draw with no takes — skip (noise). Optional short note if anyone cares — skip.
-
   if (!prev.ended && next.ended) {
     const ranked = [...next.players]
       .map((p, i) => ({ p, i }))
-      .sort((a, b) => a.p.points - b.p.points);
+      .sort((x, y) => x.p.points - y.p.points);
     const lines = ranked
       .map(({ p }, rank) => `${rank + 1}. ${who(p)} ${p.points} 🐂`)
       .join(" · ");

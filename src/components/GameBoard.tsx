@@ -17,6 +17,8 @@ type Props = {
   spectators?: SpectatorInfo[];
   onChoose: (cardNumber: number) => void;
   onPlace: (row: number, replace: boolean) => void;
+  /** When forced to take a row: play a different hand card instead */
+  onSwapCard: (cardNumber: number) => void;
   onRestart: () => void;
 };
 
@@ -41,17 +43,25 @@ export function GameBoard({
   spectators = [],
   onChoose,
   onPlace,
+  onSwapCard,
   onRestart,
 }: Props) {
   const you = isSpectator || game.yourIndex < 0 ? undefined : game.players[game.yourIndex];
   const placeMoves = you?.availableMoves?.[MoveName.PlaceCard] ?? [];
-  const mustPickRow = !isSpectator && placeMoves.length > 1;
+  const mustPickRow =
+    !isSpectator &&
+    placeMoves.length > 1 &&
+    placeMoves.every((m) => m.replace);
   const canChoose =
     !isSpectator &&
     game.phase === Phase.ChooseCard &&
     !game.ended &&
     !you?.hasChosen &&
     (you?.availableMoves?.[MoveName.ChooseCard]?.length ?? 0) > 0;
+  /** Forced row-take: may put card back and pick another from hand */
+  const canSwapCard =
+    mustPickRow && !game.ended && (you?.hand?.length ?? 0) > 0;
+  const yourPlayed = you?.faceDownCard && you.faceDownCard.number > 0 ? you.faceDownCard : null;
 
   const waitingChoose =
     !isSpectator &&
@@ -70,16 +80,43 @@ export function GameBoard({
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [logOpen, setLogOpen] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
+  /** Shown in the top-right status pill (same slot as “your turn”) */
+  const [statusAlert, setStatusAlert] = useState<ActivityItem | null>(null);
+  const alertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const events = diffActivity(prevGame.current, game);
     prevGame.current = game;
     if (events.length === 0) return;
+
     setActivity((log) => [...events.reverse(), ...log].slice(0, 12));
+
+    // Prefer the most important new hit for the status pill
+    const alert =
+      events.find((e) => e.tone === "hot") ??
+      events.find((e) => e.text.includes("got ") || e.text.includes("bull")) ??
+      null;
+    if (alert) {
+      setStatusAlert(alert);
+      if (alertTimer.current) clearTimeout(alertTimer.current);
+      alertTimer.current = setTimeout(() => setStatusAlert(null), 7000);
+    }
   }, [game]);
+
+  useEffect(() => {
+    return () => {
+      if (alertTimer.current) clearTimeout(alertTimer.current);
+    };
+  }, []);
 
   const scoreHits = activity.filter((a) => a.tone === "hot" || a.text.includes("got "));
   const logItems = scoreHits.length > 0 ? scoreHits : activity;
+
+  const statusPill = statusAlert
+    ? { text: statusAlert.text, tone: statusAlert.tone ?? "hot" }
+    : !game.ended
+      ? { text: status.headline, tone: status.tone }
+      : null;
 
   return (
     <div
@@ -87,9 +124,9 @@ export function GameBoard({
         !game.ended && !isSpectator ? "play-shell--with-hand" : ""
       }`}
     >
-      {/* Single top bar — only place for turn / ready / nudge (no duplicates below) */}
-      <div className="felt-panel space-y-1 px-2.5 py-1.5 sm:px-3 sm:py-2">
-        <div className="flex flex-wrap items-center gap-1.5">
+      {/* Top: scores left · turn + status + actions right */}
+      <div className="felt-panel px-2.5 py-1.5 sm:px-3 sm:py-2">
+        <div className="flex items-start gap-2">
           <div className="score-scroll min-w-0 flex-1">
             {game.players.map((p, i) => (
               <div
@@ -116,64 +153,60 @@ export function GameBoard({
               </div>
             ))}
           </div>
-          <span className="shrink-0 text-[0.65rem] text-amber-200/85 sm:text-xs">
-            {turnLine}
-          </span>
-          {/* Overlay toggles — do not stack in the page flow */}
-          {logItems.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => {
-                setLogOpen((o) => !o);
-                setRulesOpen(false);
-              }}
-              className={`shrink-0 rounded-full px-2 py-0.5 text-[0.65rem] font-medium ring-1 sm:text-xs ${
-                logOpen
-                  ? "bg-amber-400/20 text-amber-100 ring-amber-300/50"
-                  : "bg-black/30 text-emerald-100/70 ring-white/15 hover:bg-white/10"
-              }`}
-            >
-              Hits{logItems.length ? ` ${logItems.length}` : ""}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => {
-              setRulesOpen((o) => !o);
-              setLogOpen(false);
-            }}
-            className={`shrink-0 rounded-full px-2 py-0.5 text-[0.65rem] font-medium ring-1 sm:text-xs ${
-              rulesOpen
-                ? "bg-amber-400/20 text-amber-100 ring-amber-300/50"
-                : "bg-black/30 text-emerald-100/70 ring-white/15 hover:bg-white/10"
-            }`}
-          >
-            Rules
-          </button>
-        </div>
 
-        {!game.ended ? (
-          <p
-            className={`truncate rounded-md border px-2 py-0.5 text-xs font-medium sm:text-sm ${bannerTone[status.tone]}`}
-          >
-            {status.headline}
+          <div className="flex min-w-[10rem] max-w-[48%] shrink-0 flex-col items-end gap-0.5 sm:min-w-[13rem] sm:max-w-[16rem]">
+            <span className="text-[0.65rem] font-medium text-amber-200/90 sm:text-xs">
+              {turnLine}
+            </span>
+            {statusPill ? (
+              <p
+                className={`status-alert w-full rounded-md border px-1.5 py-1 text-right text-[0.65rem] font-semibold leading-snug sm:text-xs ${bannerTone[statusPill.tone]} ${
+                  statusAlert ? "status-alert--hit" : ""
+                }`}
+                title={statusPill.text}
+              >
+                {statusPill.text}
+              </p>
+            ) : null}
             {watchers.length > 0 ? (
-              <span className="font-normal text-sky-200/80">
-                {" "}
-                · 👁 {watchers.map((s) => s.name).join(", ")}
-              </span>
+              <p className="text-[0.6rem] text-sky-200/75">
+                👁 {watchers.map((s) => s.name).join(", ")}
+              </p>
             ) : null}
-            {isSpectator ? (
-              <span className="font-normal text-sky-200/90"> · watching</span>
-            ) : null}
-            {game.thresholdReached ? (
-              <span className="font-normal text-amber-200">
-                {" "}
-                · finish deal ({game.pointsToEnd}+)
-              </span>
-            ) : null}
-          </p>
-        ) : null}
+            <div className="flex flex-wrap justify-end gap-1">
+              {logItems.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLogOpen((o) => !o);
+                    setRulesOpen(false);
+                  }}
+                  className={`rounded-full px-2 py-0.5 text-[0.65rem] font-medium ring-1 ${
+                    logOpen
+                      ? "bg-amber-400/20 text-amber-100 ring-amber-300/50"
+                      : "bg-black/30 text-emerald-100/70 ring-white/15 hover:bg-white/10"
+                  }`}
+                >
+                  Hits {logItems.length}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  setRulesOpen((o) => !o);
+                  setLogOpen(false);
+                }}
+                className={`rounded-full px-2 py-0.5 text-[0.65rem] font-medium ring-1 ${
+                  rulesOpen
+                    ? "bg-amber-400/20 text-amber-100 ring-amber-300/50"
+                    : "bg-black/30 text-emerald-100/70 ring-white/15 hover:bg-white/10"
+                }`}
+              >
+                Rules
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Floating overlays — never push table rows down */}
@@ -337,7 +370,8 @@ export function GameBoard({
             </h2>
             {mustPickRow ? (
               <p className="text-xs font-medium text-amber-300">
-                Too low — tap a row!
+                Too low{yourPlayed ? ` (#${yourPlayed.number})` : ""} — tap a row
+                {canSwapCard ? " or another hand card" : ""}
               </p>
             ) : null}
           </div>
@@ -410,12 +444,29 @@ export function GameBoard({
             <div className="hand-dock">
               <div className="hand-dock-inner">
                 <div className="felt-panel p-2.5 sm:p-3 lg:shadow-none">
+                  {canSwapCard && yourPlayed ? (
+                    <div className="mb-2 rounded-lg border border-amber-400/40 bg-amber-950/40 px-2 py-1.5 text-xs text-amber-50">
+                      <span className="font-semibold text-amber-200">
+                        #{yourPlayed.number}
+                      </span>{" "}
+                      is lower than every row end.{" "}
+                      <span className="text-amber-100/85">
+                        Tap a <strong>row</strong> to collect it, or tap another{" "}
+                        <strong>hand</strong> card to play that instead.
+                      </span>
+                    </div>
+                  ) : null}
                   <h2 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-emerald-100/80 sm:text-sm">
                     Your hand
                     {canChoose ? (
                       <span className="font-normal normal-case tracking-normal text-amber-200/90">
                         {" "}
                         — tap a card
+                      </span>
+                    ) : canSwapCard ? (
+                      <span className="font-normal normal-case tracking-normal text-amber-200/90">
+                        {" "}
+                        — tap to switch
                       </span>
                     ) : waitingChoose ? (
                       <span className="font-normal normal-case tracking-normal text-emerald-100/50">
@@ -429,8 +480,11 @@ export function GameBoard({
                       <CardView
                         key={card.number}
                         card={card}
-                        selectable={canChoose}
-                        onClick={() => onChoose(card.number)}
+                        selectable={canChoose || canSwapCard}
+                        onClick={() => {
+                          if (canChoose) onChoose(card.number);
+                          else if (canSwapCard) onSwapCard(card.number);
+                        }}
                       />
                     ))}
                   </div>
