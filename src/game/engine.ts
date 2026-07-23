@@ -321,8 +321,8 @@ export function loserIndexes(G: GameState): number[] {
 export function toPublicState(G: GameState, yourIndex: number): PublicGameState {
   const isEnded = ended(G);
   const isSpectator = yourIndex < 0;
-  const revealCards =
-    G.phase === Phase.PlaceCard || isEnded;
+  // Official: after everyone chooses, all cards flip at once, then place low→high.
+  const revealCards = G.phase === Phase.PlaceCard || isEnded;
 
   return {
     rows: G.rows.map((row) => row.map((c) => ({ ...c }))),

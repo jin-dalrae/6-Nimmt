@@ -212,14 +212,14 @@ export function GameBoard({
         </div>
 
         <div className="flex items-center justify-between gap-2">
-          <span className="min-w-0 truncate text-[0.6rem] font-medium text-amber-200/90 sm:text-[0.65rem]">
+          <span className="min-w-0 truncate text-[0.65rem] font-medium text-amber-200/90 sm:text-[0.7rem]">
             {turnLine}
             {game.tightDeck ? (
               <span className="ml-1 font-normal text-sky-300/80">· tight</span>
             ) : null}
           </span>
           {watchers.length > 0 ? (
-            <span className="shrink-0 text-[0.55rem] text-sky-200/75 sm:text-[0.6rem]">
+            <span className="shrink-0 text-[0.65rem] text-sky-200/75 sm:text-[0.7rem]">
               👁 {watchers.map((s) => s.name).join(", ")}
             </span>
           ) : null}
@@ -234,22 +234,22 @@ export function GameBoard({
               setRulesOpen(false);
               setLogOpen(true);
             }}
-            className={`status-alert block w-full cursor-pointer rounded border px-1.5 py-0.5 text-left text-[0.58rem] font-medium leading-snug sm:text-[0.62rem] ${bannerTone[statusPill.tone]} ${
+            className={`status-alert block w-full cursor-pointer rounded border text-left ${bannerTone[statusPill.tone]} ${
               statusAlert ? "status-alert--hit" : ""
             } ${
               statusPill.tone === "hot" ? "status-alert--hot" : ""
             } ${logOpen ? "ring-1 ring-amber-300/50" : "hover:brightness-110"}`}
             title="Tap for table collect history"
           >
-            <span className="status-alert-text block">
-              <span className="font-semibold">{statusPill.text}</span>
+            <span className="status-alert-text">
+              <span className="status-alert-title">{statusPill.text}</span>
               {statusPill.detail ? (
-                <span className="mt-0.5 block font-normal opacity-90">
-                  {statusPill.detail}
-                </span>
+                <span className="status-alert-detail">{statusPill.detail}</span>
               ) : null}
             </span>
-            <span className="ml-1 font-normal text-emerald-100/30">▾</span>
+            <span className="mt-0.5 block text-center text-[0.65em] font-normal opacity-40">
+              ▾ Hits
+            </span>
           </button>
         ) : null}
       </div>
@@ -314,12 +314,12 @@ export function GameBoard({
               </button>
             </div>
             {logItems.length > 0 ? (
-              <ul className="max-h-[min(50vh,16rem)] space-y-2 overflow-y-auto text-xs sm:text-sm">
+              <ul className="max-h-[min(50vh,18rem)] space-y-2.5 overflow-y-auto text-[0.8rem] leading-snug sm:text-[0.85rem]">
                 {logItems.map((item) => (
-                  <li key={item.id} className={`leading-snug ${toneClass[item.tone ?? "info"]}`}>
-                    <div className="font-medium">· {item.text}</div>
+                  <li key={item.id} className={toneClass[item.tone ?? "info"]}>
+                    <div className="font-semibold">· {item.text}</div>
                     {item.detail ? (
-                      <p className="mt-0.5 pl-2.5 text-[0.7rem] font-normal text-emerald-100/65 sm:text-xs">
+                      <p className="mt-0.5 pl-2.5 text-[0.92em] font-normal leading-snug text-emerald-100/70">
                         {item.detail}
                       </p>
                     ) : null}
@@ -327,12 +327,12 @@ export function GameBoard({
                 ))}
               </ul>
             ) : (
-              <p className="text-xs text-emerald-100/55">
+              <p className="text-[0.8rem] text-emerald-100/55">
                 No rows collected yet this game. Full-row takes and “too low” picks show up here —
                 each entry explains why those cards went to someone’s pile.
               </p>
             )}
-            <p className="mt-2 text-[0.65rem] text-emerald-100/40">
+            <p className="mt-2 text-[0.75rem] text-emerald-100/40">
               Who took a row · why (6th card vs too low) · bull heads
             </p>
           </div>
