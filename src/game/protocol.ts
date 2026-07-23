@@ -5,10 +5,13 @@ export type { AiStyle };
 
 export type ClientMessage =
   | { type: "join"; name: string }
-  | { type: "start" }
+  | { type: "start"; tightDeck?: boolean }
+  | { type: "setTightDeck"; tightDeck: boolean }
   | { type: "addBots"; count?: number }
   | { type: "removeBot" }
   | { type: "setAiStyle"; style: AiStyle }
+  /** Per-bot difficulty (host only) */
+  | { type: "setBotAiStyle"; botId: string; style: AiStyle }
   | { type: "chooseCard"; cardNumber: number }
   | { type: "placeCard"; row: number; replace: boolean }
   /** When forced to take a row: put current card back and play another */
@@ -21,6 +24,8 @@ export type LobbyPlayer = {
   name: string;
   connected: boolean;
   isBot: boolean;
+  /** Easy / Solid / Sharp / Wild — bots only */
+  aiStyle?: AiStyle;
 };
 
 /** Watcher during an in-progress (or just-ended) game */
@@ -45,6 +50,8 @@ export type ServerMessage =
       maxPlayers: number;
       hasAiKey: boolean;
       aiStyle: AiStyle;
+      /** Lobby preference: use 1…(10n+4) deck when the game starts */
+      tightDeck: boolean;
     }
   | {
       type: "state";

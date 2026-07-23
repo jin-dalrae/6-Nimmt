@@ -69,10 +69,19 @@ export function setup(
   const resolved: GameState["options"] = {
     points: options.points ?? 66,
     handSize: options.handSize ?? 10,
+    tightDeck: options.tightDeck ?? true,
   };
   const actualSeed = seed || Math.random().toString(36).slice(2);
+  // Full deck = 104; tight = exactly one deal's cards (10n + 4 starters)
+  const deckSize = resolved.tightDeck
+    ? Math.min(104, numPlayers * resolved.handSize + 4)
+    : 104;
+  assert(
+    deckSize >= numPlayers * resolved.handSize + 4,
+    `Not enough cards for ${numPlayers} players`,
+  );
   const deck = shuffle(
-    Array.from({ length: 104 }, (_, i) => getCard(i + 1)),
+    Array.from({ length: deckSize }, (_, i) => getCard(i + 1)),
     actualSeed,
   );
 
@@ -320,6 +329,7 @@ export function toPublicState(G: GameState, yourIndex: number): PublicGameState 
     phase: G.phase,
     round: G.round,
     handSize: G.options.handSize,
+    tightDeck: G.options.tightDeck ?? false,
     pointsToEnd: G.options.points,
     yourIndex: isSpectator ? -1 : yourIndex,
     ended: isEnded,

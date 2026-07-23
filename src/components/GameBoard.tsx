@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   dealLabel,
   diffActivity,
@@ -6,6 +7,7 @@ import {
   trickLabel,
   type ActivityItem,
 } from "../game/activity";
+import { AI_STYLES } from "../game/ai";
 import type { SpectatorInfo } from "../game/protocol";
 import { MoveName, Phase, type PublicGameState } from "../game/types";
 import { CardView } from "./CardView";
@@ -83,6 +85,11 @@ export function GameBoard({
   /** Shown in the top-right status pill (same slot as “your turn”) */
   const [statusAlert, setStatusAlert] = useState<ActivityItem | null>(null);
   const alertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setHeaderSlot(document.getElementById("game-header-actions"));
+  }, []);
 
   useEffect(() => {
     const events = diffActivity(prevGame.current, game);
@@ -91,15 +98,18 @@ export function GameBoard({
 
     setActivity((log) => [...events.reverse(), ...log].slice(0, 12));
 
-    // Prefer the most important new hit for the status pill
+    // Status pill: row-takes first, then new-deal / game-over news
     const alert =
       events.find((e) => e.tone === "hot") ??
-      events.find((e) => e.text.includes("got ") || e.text.includes("bull")) ??
+      events.find((e) => e.tone === "good") ??
+      events.find((e) => e.text.includes("got ") || e.text.includes("🐂")) ??
       null;
     if (alert) {
       setStatusAlert(alert);
       if (alertTimer.current) clearTimeout(alertTimer.current);
-      alertTimer.current = setTimeout(() => setStatusAlert(null), 7000);
+      // New deals stay a bit longer so you notice the 10 cards
+      const ms = alert.tone === "good" ? 9000 : 7000;
+      alertTimer.current = setTimeout(() => setStatusAlert(null), ms);
     }
   }, [game]);
 
@@ -109,8 +119,13 @@ export function GameBoard({
     };
   }, []);
 
-  const scoreHits = activity.filter((a) => a.tone === "hot" || a.text.includes("got "));
-  const logItems = scoreHits.length > 0 ? scoreHits : activity;
+  // History of taking table rows (bulls) — shown when alert / Hits is opened
+  const collectLog = activity.filter(
+    (a) =>
+      a.tone === "hot" ||
+      /got |full row|too low|bull|🐂|took \d/i.test(a.text),
+  );
+  const logItems = collectLog.length > 0 ? collectLog : activity;
 
   const statusPill = statusAlert
     ? { text: statusAlert.text, tone: statusAlert.tone ?? "hot" }
@@ -124,9 +139,9 @@ export function GameBoard({
         !game.ended && !isSpectator ? "play-shell--with-hand" : ""
       }`}
     >
-      {/* Top: scores left · turn + status + actions right */}
-      <div className="felt-panel px-2.5 py-1.5 sm:px-3 sm:py-2">
-        <div className="flex items-start gap-2">
+      {/* Top: scores · turn · single-line status (no wrap) */}
+      <div className="felt-panel space-y-1 px-2.5 py-1.5 sm:px-3 sm:py-2">
+        <div className="flex items-center gap-2">
           <div className="score-scroll min-w-0 flex-1">
             {game.players.map((p, i) => (
               <div
@@ -139,6 +154,11 @@ export function GameBoard({
                   {p.isBot ? "🤖 " : ""}
                   {p.name}
                 </span>
+                {p.isBot && p.aiStyle ? (
+                  <span className="ml-1 text-[0.65rem] font-medium text-sky-300/90">
+                    {AI_STYLES.find((s) => s.id === p.aiStyle)?.label ?? p.aiStyle}
+                  </span>
+                ) : null}
                 <span className="ml-1 tabular-nums text-amber-200">{p.points}🐂</span>
                 {game.phase === Phase.ChooseCard && !game.ended ? (
                   <span
@@ -153,126 +173,172 @@ export function GameBoard({
               </div>
             ))}
           </div>
-
-          <div className="flex min-w-[10rem] max-w-[48%] shrink-0 flex-col items-end gap-0.5 sm:min-w-[13rem] sm:max-w-[16rem]">
-            <span className="text-[0.65rem] font-medium text-amber-200/90 sm:text-xs">
-              {turnLine}
+          <span className="shrink-0 text-[0.65rem] font-medium text-amber-200/90 sm:text-xs">
+            {turnLine}
+            {game.tightDeck ? (
+              <span className="ml-1 font-normal text-sky-300/80">· tight</span>
+            ) : null}
+          </span>
+          {watchers.length > 0 ? (
+            <span className="hidden shrink-0 text-[0.6rem] text-sky-200/75 sm:inline">
+              👁 {watchers.map((s) => s.name).join(", ")}
             </span>
-            {statusPill ? (
-              <p
-                className={`status-alert w-full rounded-md border px-1.5 py-1 text-right text-[0.65rem] font-semibold leading-snug sm:text-xs ${bannerTone[statusPill.tone]} ${
-                  statusAlert ? "status-alert--hit" : ""
+          ) : null}
+        </div>
+
+        {statusPill ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setRulesOpen(false);
+              setLogOpen(true);
+            }}
+            className={`status-alert block w-full cursor-pointer overflow-x-auto whitespace-nowrap rounded-md border px-2 py-1.5 text-left text-[0.7rem] font-semibold leading-none sm:text-xs ${bannerTone[statusPill.tone]} ${
+              statusAlert ? "status-alert--hit" : ""
+            } ${logOpen ? "ring-2 ring-amber-300/50" : "hover:brightness-110"}`}
+            title="Tap for table collect history"
+          >
+            {statusPill.text}
+            <span className="ml-2 font-normal text-emerald-100/35">▾</span>
+          </button>
+        ) : null}
+      </div>
+
+      {/* Hits / Rules — next to logo in page header */}
+      {headerSlot
+        ? createPortal(
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setLogOpen((o) => !o);
+                  setRulesOpen(false);
+                }}
+                className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${
+                  logOpen
+                    ? "bg-amber-400/20 text-amber-100 ring-amber-300/50"
+                    : "bg-black/30 text-emerald-100/80 ring-white/15 hover:bg-white/10"
                 }`}
-                title={statusPill.text}
               >
-                {statusPill.text}
-              </p>
-            ) : null}
-            {watchers.length > 0 ? (
-              <p className="text-[0.6rem] text-sky-200/75">
-                👁 {watchers.map((s) => s.name).join(", ")}
-              </p>
-            ) : null}
-            <div className="flex flex-wrap justify-end gap-1">
-              {logItems.length > 0 ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLogOpen((o) => !o);
-                    setRulesOpen(false);
-                  }}
-                  className={`rounded-full px-2 py-0.5 text-[0.65rem] font-medium ring-1 ${
-                    logOpen
-                      ? "bg-amber-400/20 text-amber-100 ring-amber-300/50"
-                      : "bg-black/30 text-emerald-100/70 ring-white/15 hover:bg-white/10"
-                  }`}
-                >
-                  Hits {logItems.length}
-                </button>
-              ) : null}
+                Hits{logItems.length ? ` ${logItems.length}` : ""}
+              </button>
               <button
                 type="button"
                 onClick={() => {
                   setRulesOpen((o) => !o);
                   setLogOpen(false);
                 }}
-                className={`rounded-full px-2 py-0.5 text-[0.65rem] font-medium ring-1 ${
+                className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${
                   rulesOpen
                     ? "bg-amber-400/20 text-amber-100 ring-amber-300/50"
-                    : "bg-black/30 text-emerald-100/70 ring-white/15 hover:bg-white/10"
+                    : "bg-black/30 text-emerald-100/80 ring-white/15 hover:bg-white/10"
                 }`}
               >
                 Rules
               </button>
-            </div>
-          </div>
-        </div>
-      </div>
+            </>,
+            headerSlot,
+          )
+        : null}
 
-      {/* Floating overlays — never push table rows down */}
-      {logOpen && logItems.length > 0 ? (
-        <div
-          className="score-overlay"
-          role="dialog"
-          aria-label="Score hits"
-        >
-          <div className="mb-1.5 flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-amber-200/90">
-              What happened
+      {/* Centered overlays — open from status alert or header Hits/Rules */}
+      {logOpen ? (
+        <>
+          <button
+            type="button"
+            className="score-overlay-backdrop"
+            aria-label="Close history"
+            onClick={() => setLogOpen(false)}
+          />
+          <div className="score-overlay" role="dialog" aria-label="Row collect history">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-200/90">
+                Table card collecting
+              </p>
+              <button
+                type="button"
+                className="text-xs text-emerald-100/50 hover:text-emerald-100"
+                onClick={() => setLogOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+            {logItems.length > 0 ? (
+              <ul className="max-h-[min(50vh,16rem)] space-y-1.5 overflow-y-auto text-xs sm:text-sm">
+                {logItems.map((item) => (
+                  <li key={item.id} className={`leading-snug ${toneClass[item.tone ?? "info"]}`}>
+                    · {item.text}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-emerald-100/55">
+                No rows collected yet this game. Full-row takes and “too low” picks show up here.
+              </p>
+            )}
+            <p className="mt-2 text-[0.65rem] text-emerald-100/40">
+              Who took a row · why · bull heads
             </p>
-            <button
-              type="button"
-              className="text-xs text-emerald-100/50 hover:text-emerald-100"
-              onClick={() => setLogOpen(false)}
-            >
-              Close
-            </button>
           </div>
-          <ul className="max-h-40 space-y-1 overflow-y-auto text-xs sm:max-h-52 sm:text-sm">
-            {logItems.map((item) => (
-              <li key={item.id} className={`leading-snug ${toneClass[item.tone ?? "info"]}`}>
-                · {item.text}
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 text-[0.65rem] text-emerald-100/40">
-            Row takes only (cards + bull heads)
-          </p>
-        </div>
+        </>
       ) : null}
 
       {rulesOpen ? (
-        <div className="score-overlay" role="dialog" aria-label="Bull-head scoring">
-          <div className="mb-1.5 flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-100/90">
-              Bull-head scoring
+        <>
+          <button
+            type="button"
+            className="score-overlay-backdrop"
+            aria-label="Close rules"
+            onClick={() => setRulesOpen(false)}
+          />
+          <div className="score-overlay" role="dialog" aria-label="Bull-head scoring">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-100/90">
+                Bull-head scoring
+              </p>
+              <button
+                type="button"
+                className="text-xs text-emerald-100/50 hover:text-emerald-100"
+                onClick={() => setRulesOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+            <ul className="mb-3 grid gap-1 text-xs text-emerald-50/90 sm:grid-cols-2">
+              <li>
+                <span className="text-emerald-100/60">Normal</span> → <strong>1</strong> 🐂
+              </li>
+              <li>
+                <span className="text-emerald-100/60">Ends in 5</span> → <strong>2</strong> 🐂
+              </li>
+              <li>
+                <span className="text-emerald-100/60">×10</span> → <strong>3</strong> 🐂
+              </li>
+              <li className="text-red-200">
+                <span className="opacity-80">×11</span> → <strong>5</strong> 🐂
+              </li>
+              <li className="text-red-200">
+                <span className="opacity-80">55</span> → <strong>7</strong> 🐂
+              </li>
+            </ul>
+            <p className="text-[0.7rem] font-semibold uppercase tracking-wide text-emerald-100/70">
+              Taking a row (official)
             </p>
-            <button
-              type="button"
-              className="text-xs text-emerald-100/50 hover:text-emerald-100"
-              onClick={() => setRulesOpen(false)}
-            >
-              Close
-            </button>
+            <ul className="mt-1 space-y-1 text-xs text-emerald-50/85">
+              <li>
+                <strong className="text-amber-200">Full row:</strong> your card fits the closest
+                lower end, but that row already has 5 cards → you take those 5 (6th card rule).
+              </li>
+              <li>
+                <strong className="text-amber-200">Too low:</strong> your card is lower than every
+                row’s last card → you choose any row to take (usually fewest 🐂); your card starts
+                it.
+              </li>
+            </ul>
           </div>
-          <ul className="grid gap-1 text-xs text-emerald-50/90 sm:grid-cols-2">
-            <li>
-              <span className="text-emerald-100/60">Normal</span> → <strong>1</strong> 🐂
-            </li>
-            <li>
-              <span className="text-emerald-100/60">Ends in 5</span> → <strong>2</strong> 🐂
-            </li>
-            <li>
-              <span className="text-emerald-100/60">×10</span> → <strong>3</strong> 🐂
-            </li>
-            <li className="text-red-200">
-              <span className="opacity-80">×11</span> → <strong>5</strong> 🐂
-            </li>
-            <li className="text-red-200">
-              <span className="opacity-80">55</span> → <strong>7</strong> 🐂
-            </li>
-          </ul>
-        </div>
+        </>
       ) : null}
 
       {game.ended ? (
@@ -370,8 +436,9 @@ export function GameBoard({
             </h2>
             {mustPickRow ? (
               <p className="text-xs font-medium text-amber-300">
-                Too low{yourPlayed ? ` (#${yourPlayed.number})` : ""} — tap a row
-                {canSwapCard ? " or another hand card" : ""}
+                Rule: #{yourPlayed?.number ?? "?"} &lt; every row end — pick any
+                row to take (fewest 🐂)
+                {canSwapCard ? ", or switch card" : ""}
               </p>
             ) : null}
           </div>
@@ -446,14 +513,16 @@ export function GameBoard({
                 <div className="felt-panel p-2.5 sm:p-3 lg:shadow-none">
                   {canSwapCard && yourPlayed ? (
                     <div className="mb-2 rounded-lg border border-amber-400/40 bg-amber-950/40 px-2 py-1.5 text-xs text-amber-50">
-                      <span className="font-semibold text-amber-200">
-                        #{yourPlayed.number}
-                      </span>{" "}
-                      is lower than every row end.{" "}
-                      <span className="text-amber-100/85">
-                        Tap a <strong>row</strong> to collect it, or tap another{" "}
-                        <strong>hand</strong> card to play that instead.
-                      </span>
+                      <p className="font-semibold text-amber-200">
+                        Official rule — lowest card
+                      </p>
+                      <p className="mt-0.5 text-amber-100/90">
+                        #{yourPlayed.number} is smaller than every row’s last card, so it
+                        can’t go on the table. You must take{" "}
+                        <strong>one whole row</strong> (choose the fewest bull heads). Your
+                        #{yourPlayed.number} becomes the new start of that row. Or tap another
+                        hand card to play that instead (house rule).
+                      </p>
                     </div>
                   ) : null}
                   <h2 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-emerald-100/80 sm:text-sm">
@@ -475,7 +544,7 @@ export function GameBoard({
                       </span>
                     ) : null}
                   </h2>
-                  <div className="hand-scroll justify-center sm:justify-start lg:flex-wrap lg:justify-start lg:gap-2">
+                  <div className="hand-scroll lg:gap-2">
                     {sortedHand.map((card) => (
                       <CardView
                         key={card.number}

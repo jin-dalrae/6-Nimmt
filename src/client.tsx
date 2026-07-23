@@ -20,6 +20,7 @@ import {
 import type { PublicGameState } from "./game/types";
 import { Lobby } from "./components/Lobby";
 import { GameBoard } from "./components/GameBoard";
+import { MrJackApp } from "./mrjack/MrJackApp";
 
 function randomCode(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -62,6 +63,7 @@ function App() {
   const [maxPlayers, setMaxPlayers] = useState(10);
   const [hasAiKey, setHasAiKey] = useState(false);
   const [aiStyle, setAiStyle] = useState<AiStyle>("solid");
+  const [tightDeck, setTightDeck] = useState(true);
   const [game, setGame] = useState<PublicGameState | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +97,7 @@ function App() {
           setMaxPlayers(msg.maxPlayers);
           setHasAiKey(msg.hasAiKey);
           setAiStyle(msg.aiStyle);
+          if (typeof msg.tightDeck === "boolean") setTightDeck(msg.tightDeck);
           // youId empty = connect preview only — don't flip into "playing" UI yet
           if (msg.youId) {
             setYouId(msg.youId);
@@ -284,26 +287,38 @@ function App() {
 
   return (
     <div
-      className={`mx-auto flex min-h-screen max-w-7xl flex-col px-4 ${
+      className={`app-shell mx-auto flex min-h-dvh max-w-7xl flex-col px-4 ${
         isPlaying
           ? "app-shell--playing py-2 sm:py-4"
           : "py-6 sm:py-10"
       }`}
     >
-      <header className={`text-center ${isPlaying ? "header--compact" : "mb-8"}`}>
-        <p className="brand-line text-xs font-semibold uppercase tracking-[0.35em] text-amber-300/90">
-          SFboardgames
-        </p>
-        <h1
-          className={`font-bold tracking-tight ${
-            isPlaying ? "" : "mt-2 text-3xl sm:text-4xl"
-          }`}
-        >
-          6 Nimmt! <span className="text-amber-300">🐂</span>
-        </h1>
-        <p className={`text-emerald-100/70 ${isPlaying ? "mt-0.5 text-xs" : "mt-2 text-sm"}`}>
-          {subtitle}
-        </p>
+      <header className={`${isPlaying ? "header--compact" : "mb-8 text-center"}`}>
+        {isPlaying ? (
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0 flex-1 text-left sm:text-center sm:flex-none">
+              <h1 className="truncate font-bold tracking-tight">
+                6 Nimmt! <span className="text-amber-300">🐂</span>
+              </h1>
+              <p className="mt-0.5 truncate text-xs text-emerald-100/70">{subtitle}</p>
+            </div>
+            {/* Hits / Rules portaled here from GameBoard */}
+            <div
+              id="game-header-actions"
+              className="flex shrink-0 items-center gap-1.5"
+            />
+          </div>
+        ) : (
+          <>
+            <p className="brand-line text-xs font-semibold uppercase tracking-[0.35em] text-amber-300/90">
+              SFboardgames
+            </p>
+            <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">
+              6 Nimmt! <span className="text-amber-300">🐂</span>
+            </h1>
+            <p className="mt-2 text-sm text-emerald-100/70">{subtitle}</p>
+          </>
+        )}
       </header>
 
       {toast ? (
@@ -483,9 +498,39 @@ function App() {
       {screen === "room" && !joined ? (
         <div className="mx-auto w-full max-w-md felt-panel p-6 text-center">
           <p className="text-emerald-100/80">
-            {connected ? "Joining room…" : "Connecting…"}
+            {error
+              ? "Couldn’t join"
+              : connected
+                ? "Joining room…"
+                : "Connecting…"}
           </p>
+          <p className="mt-1 font-mono text-sm tracking-widest text-amber-300/90">{activeRoom}</p>
           {error ? <p className="mt-3 text-sm text-red-300">{error}</p> : null}
+
+          {error ? (
+            <div className="mt-4 text-left">
+              <label className="mb-1 block text-sm text-emerald-100/80">Your name</label>
+              <input
+                className="mb-3 w-full rounded-xl border border-white/15 bg-black/30 px-4 py-3 outline-none ring-amber-300/40 focus:ring-2"
+                value={name}
+                maxLength={20}
+                onChange={(e) => setName(e.target.value)}
+              />
+              <button
+                type="button"
+                className="w-full rounded-xl bg-amber-400 px-4 py-3 font-semibold text-slate-900 hover:bg-amber-300 disabled:opacity-50"
+                disabled={!name.trim() || !connected}
+                onClick={() => {
+                  setError(null);
+                  localStorage.setItem("sfbg-name", name.trim());
+                  send({ type: "join", name: name.trim() });
+                }}
+              >
+                Try again
+              </button>
+            </div>
+          ) : null}
+
           <button
             type="button"
             onClick={leaveRoom}
@@ -507,10 +552,16 @@ function App() {
             maxPlayers={maxPlayers}
             hasAiKey={hasAiKey}
             aiStyle={aiStyle}
-            onStart={() => send({ type: "start" })}
+            onStart={() => send({ type: "start", tightDeck })}
             onAddBots={(count) => send({ type: "addBots", count })}
             onRemoveBot={() => send({ type: "removeBot" })}
             onSetAiStyle={(style) => send({ type: "setAiStyle", style })}
+            onSetBotAiStyle={(botId, style) => send({ type: "setBotAiStyle", botId, style })}
+            tightDeck={tightDeck}
+            onSetTightDeck={(tight) => {
+              setTightDeck(tight);
+              send({ type: "setTightDeck", tightDeck: tight });
+            }}
             onLeave={leaveRoom}
           />
         </div>
@@ -543,14 +594,32 @@ function App() {
       ) : null}
 
       <footer
-        className={`mt-auto text-center text-xs text-emerald-100/40 ${
-          isPlaying ? "hidden pb-2 pt-4 sm:block sm:pt-6" : "pt-10"
+        className={`mt-auto text-center ${
+          isPlaying ? "hidden pb-2 pt-4 sm:block sm:pt-6" : "pt-10 pb-6"
         }`}
       >
-        SFboardgames · 6 Nimmt! fan project · not affiliated with Amigo Spiele
+        {!isPlaying ? (
+          <a
+            href="/mrjack"
+            className="mb-4 inline-flex items-center justify-center gap-2 rounded-xl border border-violet-400/50 bg-violet-500/15 px-5 py-3 text-sm font-semibold text-violet-50 hover:bg-violet-500/25"
+          >
+            Play Mr. Jack <span aria-hidden>🕵️</span>
+          </a>
+        ) : null}
+        <p className="text-xs text-emerald-100/40">
+          SFboardgames · 6 Nimmt! fan project · not affiliated with Amigo Spiele
+        </p>
       </footer>
     </div>
   );
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+function Root() {
+  const path = window.location.pathname.replace(/\/+$/, "") || "/";
+  if (path === "/mrjack" || path.endsWith("/mrjack")) {
+    return <MrJackApp />;
+  }
+  return <App />;
+}
+
+createRoot(document.getElementById("root")!).render(<Root />);

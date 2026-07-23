@@ -3,9 +3,16 @@
  * https://github.com/boardgamers/take6-engine
  */
 
+export type AiStyleId = "easy" | "solid" | "sharp" | "wild";
+
 export interface GameOptions {
   points?: number;
   handSize?: number;
+  /**
+   * Use only cards 1…(handSize × players + 4) so every card is in play each deal.
+   * Official rules use the full 1–104 deck.
+   */
+  tightDeck?: boolean;
 }
 
 export interface Card {
@@ -62,6 +69,8 @@ export interface PublicPlayer {
   discard: Card[];
   isYou: boolean;
   isBot?: boolean;
+  /** Bot difficulty when isBot */
+  aiStyle?: AiStyleId;
   hand?: Card[];
   availableMoves?: AvailableMoves | null;
 }
@@ -72,6 +81,8 @@ export interface PublicGameState {
   round: number;
   /** Cards dealt per player each deal (usually 10) */
   handSize: number;
+  /** Deck is 1…(handSize×players+4) instead of 1–104 */
+  tightDeck: boolean;
   pointsToEnd: number;
   players: PublicPlayer[];
   yourIndex: number;

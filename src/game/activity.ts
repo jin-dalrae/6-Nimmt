@@ -113,10 +113,12 @@ export function phaseStatus(game: PublicGameState): {
 
   if (game.phase === Phase.PlaceCard) {
     const placeOpts = you?.availableMoves?.[MoveName.PlaceCard] ?? [];
-    if (placeOpts.length > 1) {
+    if (placeOpts.length > 1 && placeOpts.every((m) => m.replace)) {
+      // Official Rule 4: card lower than every row end → choose any row to take
       return {
-        headline: "Card too low — take a row or switch card",
-        detail: "Tap a row to collect it, or pick another card from your hand.",
+        headline: "Too low for every row — pick a row to take",
+        detail:
+          "Rule: your card fits nowhere. Choose any row (usually fewest 🐂). Your card starts that row. Or switch to another hand card.",
         tone: "hot",
       };
     }
@@ -149,9 +151,16 @@ function bullsWord(n: number): string {
   return n === 1 ? "1 🐂" : `${n} 🐂`;
 }
 
-/** Explain a row take: full row vs too-low, closest end, bulls. */
+/**
+ * Official 6 Nimmt takes (both score the row’s bull heads):
+ * 1) Full row — card fits the closest lower end, but that row already has 5 cards
+ *    (6th card). Player must take those 5; their card starts the row.
+ * 2) Lowest card — card is lower than every row end. Player chooses any row to
+ *    take; their card starts that row.
+ */
 function describeRowTake(
   prev: PublicGameState,
+  next: PublicGameState,
   playerPrev: PublicGameState["players"][0],
   playerNext: PublicGameState["players"][0],
   cardsTaken: number,
@@ -163,50 +172,68 @@ function describeRowTake(
       ? playerPrev.faceDownCard.number
       : null;
 
-  let closestEnd: number | null = null;
-  let prevRowLen = 0;
-  let tooLow = false;
-  let fullRow = false;
-
-  if (played != null && prev.rows.length) {
-    const ends = prev.rows
-      .map((row) => row[row.length - 1]?.number)
-      .filter((n): n is number => n != null);
-    const lower = ends.filter((e) => e < played);
-    if (lower.length === 0) {
-      // Card lower than every row end → forced pick
-      tooLow = true;
-    } else {
-      // Legal attach: closest lower end
-      closestEnd = Math.max(...lower);
-      const row = prev.rows.find((r) => r[r.length - 1]?.number === closestEnd);
-      prevRowLen = row?.length ?? 0;
-      // 6th card on a full row
-      fullRow = prevRowLen >= 5;
+  // Which table row was replaced? After a take, that row is just [played].
+  let takenRowIndex = -1;
+  let takenRow: typeof prev.rows[0] = [];
+  if (played != null) {
+    for (let r = 0; r < next.rows.length; r++) {
+      const nr = next.rows[r];
+      if (nr.length === 1 && nr[0]?.number === played) {
+        takenRowIndex = r;
+        takenRow = prev.rows[r] ?? [];
+        break;
+      }
     }
   }
 
-  // Full row: "#46 was closest to #43 but that row was full → 7 🐂"
+  const ends = prev.rows
+    .map((row) => row[row.length - 1]?.number)
+    .filter((n): n is number => n != null);
+  const lower = played != null ? ends.filter((e) => e < played) : [];
+  const tooLow = played != null && lower.length === 0;
+  const closestEnd = lower.length > 0 ? Math.max(...lower) : null;
+  const closestRow =
+    closestEnd != null
+      ? prev.rows.find((r) => r[r.length - 1]?.number === closestEnd)
+      : null;
+  const closestLen = closestRow?.length ?? 0;
+  // Rule 3: would have been the 6th card on the closest row
+  const fullRow = !tooLow && closestEnd != null && closestLen >= 5;
+
+  const rowLabel =
+    takenRowIndex >= 0
+      ? `row ${takenRowIndex + 1}`
+      : takenRow.length
+        ? `row ending #${takenRow[takenRow.length - 1]?.number}`
+        : "a row";
+  const endOfTaken =
+    takenRow.length > 0 ? takenRow[takenRow.length - 1]?.number : null;
+
+  // Rule 3 — full row (6th card)
   if (played != null && fullRow && closestEnd != null) {
     if (playerNext.isYou) {
-      return `Your #${played} was closest to #${closestEnd}, but that row was already full (${prevRowLen}/5) — you got ${bullsWord(bulls)}`;
+      return `Your #${played} fit closest to #${closestEnd}, but that row was full (5/5) — 6th card takes the row: ${bullsWord(bulls)} (${cardsWord(cardsTaken)})`;
     }
-    return `${name} got ${bullsWord(bulls)} for a full row (#${played} closest to #${closestEnd})`;
+    return `${name}: #${played} was 6th on full row (closest #${closestEnd}) — got ${bullsWord(bulls)}`;
   }
 
-  // Too low for every row
+  // Rule 4 — lowest card: choose any row
   if (played != null && tooLow) {
+    const which =
+      endOfTaken != null
+        ? `${rowLabel} (was ending #${endOfTaken})`
+        : rowLabel;
     if (playerNext.isYou) {
-      return `Your #${played} was lower than every row — took ${cardsWord(cardsTaken)} for ${bullsWord(bulls)}`;
+      return `Your #${played} was lower than every row end — you chose ${which}: ${cardsWord(cardsTaken)} for ${bullsWord(bulls)}`;
     }
-    return `${name} got ${bullsWord(bulls)} taking a row (#${played} too low for every end)`;
+    return `${name}: #${played} too low for every row — took ${which}: ${bullsWord(bulls)}`;
   }
 
-  // Fallback with card count + bulls
+  // Fallback
   if (playerNext.isYou) {
-    return `You got ${cardsWord(cardsTaken)} for ${bullsWord(bulls)} · total ${playerNext.points} 🐂`;
+    return `You took ${cardsWord(cardsTaken)} from ${rowLabel} for ${bullsWord(bulls)} · total ${playerNext.points} 🐂`;
   }
-  return `${name} got ${bullsWord(bulls)} · total ${playerNext.points} 🐂`;
+  return `${name} took ${cardsWord(cardsTaken)} for ${bullsWord(bulls)} · total ${playerNext.points} 🐂`;
 }
 
 /**
@@ -220,19 +247,22 @@ export function diffActivity(
   const out: ActivityItem[] = [];
   const ts = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
+  const handSize = next.handSize || 10;
+
   if (!prev) {
     out.push({
       id: ts(),
-      text: `${dealLabel(next)} · ${trickLabel(next)} — hands dealt`,
-      tone: "info",
+      text: `${dealLabel(next)}: you drew ${handSize} cards · ${trickLabel(next)}`,
+      tone: "good",
     });
     return out;
   }
 
+  // End of previous 10-card hand → new deal is big news (not a score hit)
   if (next.round !== prev.round) {
     out.push({
       id: ts(),
-      text: `${dealLabel(next)} — new hands (${trickLabel(next)})`,
+      text: `${dealLabel(next)}: everyone drew ${handSize} new cards — scores keep · ${trickLabel(next)}`,
       tone: "good",
     });
   }
@@ -247,7 +277,14 @@ export function diffActivity(
     const bulls = b.points - a.points;
 
     if (cardsTaken > 0 || bulls > 0) {
-      const text = describeRowTake(prev, a, b, cardsTaken || 1, bulls > 0 ? bulls : 0);
+      const text = describeRowTake(
+        prev,
+        next,
+        a,
+        b,
+        cardsTaken || 1,
+        bulls > 0 ? bulls : 0,
+      );
 
       out.push({
         id: ts(),

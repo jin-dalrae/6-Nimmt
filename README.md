@@ -15,7 +15,14 @@ Built on **Cloudflare Pages + Workers** with **PartyServer** (Durable Objects + 
 
 Template pattern from [threepointone/partyvite](https://github.com/threepointone/partyvite).
 
-## Play
+## Games
+
+| Path | Game |
+|------|------|
+| `/` | **6 Nimmt!** multiplayer |
+| `/mrjack` | **Mr. Jack** — 2-player deduction (local / vs AI). Unofficial fan adaptation. |
+
+## Play (6 Nimmt!)
 
 1. Open the site, enter a name.
 2. **Create room** (or enter a friend’s code) and share the code / invite link.

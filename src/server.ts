@@ -55,6 +55,8 @@ type RoomPlayer = {
   name: string;
   connectionId: string | null;
   isBot: boolean;
+  /** Per-bot level; falls back to room.aiStyle */
+  aiStyle?: AiStyle;
 };
 
 type Spectator = {
@@ -72,6 +74,8 @@ type RoomData = {
   game: GameState | null;
   seats: string[];
   aiStyle: AiStyle;
+  /** Use cards 1…(10×players+4) instead of full 1–104 */
+  tightDeck: boolean;
 };
 
 function sleep(ms: number) {
@@ -93,6 +97,7 @@ export class GameRoom extends Server<Env> {
     game: null,
     seats: [],
     aiStyle: "solid",
+    tightDeck: true,
   };
 
   private botsBusy = false;
@@ -106,6 +111,7 @@ export class GameRoom extends Server<Env> {
       this.room = {
         ...saved,
         aiStyle: isAiStyle(saved.aiStyle) ? saved.aiStyle : "solid",
+        tightDeck: typeof saved.tightDeck === "boolean" ? saved.tightDeck : true,
         spectators: Array.isArray(saved.spectators) ? saved.spectators : [],
         players: saved.players.map((p) => ({
           ...p,
@@ -171,7 +177,15 @@ export class GameRoom extends Server<Env> {
       name: p.name,
       connected: p.isBot || p.connectionId !== null,
       isBot: p.isBot,
+      aiStyle: p.isBot ? p.aiStyle ?? this.room.aiStyle : undefined,
     }));
+  }
+
+  private botStyleAtSeat(index: number): AiStyle {
+    const id = this.room.seats[index];
+    const p = this.room.players.find((x) => x.id === id);
+    if (p?.isBot && isAiStyle(p.aiStyle)) return p.aiStyle;
+    return this.room.aiStyle;
   }
 
   private spectatorInfos(): SpectatorInfo[] {
@@ -206,6 +220,25 @@ export class GameRoom extends Server<Env> {
       return true;
     }
     return false;
+  }
+
+  /** True if this connection id is gone / no longer live */
+  private connectionDead(connectionId: string | null): boolean {
+    if (!connectionId) return true;
+    return !this.getConnection(connectionId);
+  }
+
+  /** Detach an old socket that still holds a seat/spectator slot */
+  private detachConnection(connectionId: string | null) {
+    if (!connectionId) return;
+    const old = this.getConnection<ConnState>(connectionId);
+    if (old) {
+      try {
+        old.setState(null);
+      } catch {
+        // ignore
+      }
+    }
   }
 
   /**
@@ -248,6 +281,7 @@ export class GameRoom extends Server<Env> {
       maxPlayers: MAX_PLAYERS,
       hasAiKey: Boolean(this.apiKey()),
       aiStyle: this.room.aiStyle,
+      tightDeck: this.room.tightDeck,
     });
   }
 
@@ -284,6 +318,7 @@ export class GameRoom extends Server<Env> {
       const publicState = toPublicState(this.room.game, idx);
       publicState.players.forEach((p, i) => {
         p.isBot = this.isBotSeat(i);
+        if (p.isBot) p.aiStyle = this.botStyleAtSeat(i);
       });
       const status = publicState.ended ? "ended" : "playing";
       if (publicState.ended) this.room.status = "ended";
@@ -326,8 +361,6 @@ export class GameRoom extends Server<Env> {
     }
     this.botsBusy = true;
     this.botsNeedRerun = false;
-    const style = this.room.aiStyle;
-    const pace = botPaceMs(style);
 
     try {
       let guard = 0;
@@ -350,12 +383,18 @@ export class GameRoom extends Server<Env> {
 
           // Snapshot only for AI thinking (may be slightly stale; apply uses latest)
           const thinkSnap = cloneGame(G);
+          const pace = Math.max(...botIndexes.map((i) => botPaceMs(this.botStyleAtSeat(i))));
           await sleep(pace);
 
           const picks = await Promise.all(
             botIndexes.map(async (i) => ({
               i,
-              card: await chooseCardForBot(cloneGame(thinkSnap), i, this.apiKey(), style),
+              card: await chooseCardForBot(
+                cloneGame(thinkSnap),
+                i,
+                this.apiKey(),
+                this.botStyleAtSeat(i),
+              ),
             })),
           );
 
@@ -400,13 +439,14 @@ export class GameRoom extends Server<Env> {
         if (actor < 0) break;
 
         const placeSnap = cloneGame(G);
-        await sleep(Math.round(pace * 0.7));
+        const actorStyle = this.botStyleAtSeat(actor);
+        await sleep(Math.round(botPaceMs(actorStyle) * 0.7));
 
         const choice = await placeRowForBot(
           cloneGame(placeSnap),
           actor,
           this.apiKey(),
-          style,
+          actorStyle,
         );
 
         // Re-read after async — don't overwrite human place/choose
@@ -476,6 +516,7 @@ export class GameRoom extends Server<Env> {
       maxPlayers: MAX_PLAYERS,
       hasAiKey: Boolean(this.apiKey()),
       aiStyle: this.room.aiStyle,
+      tightDeck: this.room.tightDeck,
     });
   }
 
@@ -496,7 +537,10 @@ export class GameRoom extends Server<Env> {
           await this.handleJoin(connection, msg.name);
           break;
         case "start":
-          await this.handleStart(connection);
+          await this.handleStart(connection, msg.tightDeck);
+          break;
+        case "setTightDeck":
+          await this.handleSetTightDeck(connection, msg.tightDeck);
           break;
         case "addBots":
           await this.handleAddBots(connection, msg.count ?? 1);
@@ -506,6 +550,9 @@ export class GameRoom extends Server<Env> {
           break;
         case "setAiStyle":
           await this.handleSetAiStyle(connection, msg.style);
+          break;
+        case "setBotAiStyle":
+          await this.handleSetBotAiStyle(connection, msg.botId, msg.style);
           break;
         case "chooseCard":
           await this.handleChoose(connection, msg.cardNumber);
@@ -604,38 +651,77 @@ export class GameRoom extends Server<Env> {
       return;
     }
 
-    // Reclaim seated player who disconnected (same name)
-    const reclaim = this.room.players.find(
-      (p) =>
-        !p.isBot &&
-        p.connectionId === null &&
-        p.name.toLowerCase() === name.toLowerCase(),
+    const nameKey = name.toLowerCase();
+
+    // Same name as a human seat → reclaim (also after refresh while old socket lingers)
+    const sameSeat = this.room.players.find(
+      (p) => !p.isBot && p.name.toLowerCase() === nameKey,
     );
-    if (reclaim) {
-      reclaim.connectionId = connection.id;
-      // Leave spectator list if they were listed somehow
-      this.room.spectators = this.room.spectators.filter((s) => s.id !== reclaim.id);
+    if (sameSeat) {
+      // Someone else is live on that name — don't steal a real second person
+      if (
+        sameSeat.connectionId &&
+        sameSeat.connectionId !== connection.id &&
+        !this.connectionDead(sameSeat.connectionId)
+      ) {
+        this.send(connection, {
+          type: "error",
+          message: `"${sameSeat.name}" is already in this room (online). Pick another name.`,
+        });
+        return;
+      }
+      this.detachConnection(sameSeat.connectionId);
+      sameSeat.connectionId = connection.id;
+      this.room.spectators = this.room.spectators.filter((s) => s.id !== sameSeat.id);
       connection.setState({
-        playerId: reclaim.id,
-        name: reclaim.name,
+        playerId: sameSeat.id,
+        name: sameSeat.name,
         role: "player",
       } satisfies ConnState);
       await this.persist();
       this.broadcastRoom();
       if (this.room.game) this.pushGameState();
-      this.send(connection, { type: "toast", message: "Reconnected to your seat" });
+      this.send(connection, {
+        type: "toast",
+        message:
+          this.room.status === "lobby"
+            ? `Rejoined room ${this.name}`
+            : "Reconnected to your seat",
+      });
       return;
     }
 
-    // Reclaim spectator who refreshed
-    const reclaimSpec = this.room.spectators.find(
-      (s) => s.connectionId === null && s.name.toLowerCase() === name.toLowerCase(),
+    // Name used by a bot
+    const botClash = this.room.players.find(
+      (p) => p.isBot && p.name.toLowerCase() === nameKey,
     );
-    if (reclaimSpec) {
-      reclaimSpec.connectionId = connection.id;
+    if (botClash) {
+      this.send(connection, {
+        type: "error",
+        message: `"${botClash.name}" is a bot name — pick a different display name.`,
+      });
+      return;
+    }
+
+    // Same name as a spectator → reclaim watcher slot
+    const sameSpec = this.room.spectators.find((s) => s.name.toLowerCase() === nameKey);
+    if (sameSpec) {
+      if (
+        sameSpec.connectionId &&
+        sameSpec.connectionId !== connection.id &&
+        !this.connectionDead(sameSpec.connectionId)
+      ) {
+        this.send(connection, {
+          type: "error",
+          message: `"${sameSpec.name}" is already watching. Pick another name.`,
+        });
+        return;
+      }
+      this.detachConnection(sameSpec.connectionId);
+      sameSpec.connectionId = connection.id;
       connection.setState({
-        playerId: reclaimSpec.id,
-        name: reclaimSpec.name,
+        playerId: sameSpec.id,
+        name: sameSpec.name,
         role: "spectator",
       } satisfies ConnState);
       await this.persist();
@@ -647,13 +733,6 @@ export class GameRoom extends Server<Env> {
 
     // Mid-game or ended: join as spectator (watch now, lobby next)
     if (this.room.status === "playing" || this.room.status === "ended") {
-      if (this.nameTaken(name)) {
-        this.send(connection, {
-          type: "error",
-          message: "Name already taken — pick another, or use a seated player's name to reconnect",
-        });
-        return;
-      }
       if (this.room.spectators.filter((s) => s.connectionId).length >= MAX_SPECTATORS) {
         this.send(connection, { type: "error", message: "Too many watchers right now" });
         return;
@@ -682,11 +761,6 @@ export class GameRoom extends Server<Env> {
     // Lobby: join as player
     if (this.room.players.length >= MAX_PLAYERS) {
       this.send(connection, { type: "error", message: "Room is full" });
-      return;
-    }
-
-    if (this.nameTaken(name)) {
-      this.send(connection, { type: "error", message: "Name already taken in this room" });
       return;
     }
 
@@ -720,11 +794,16 @@ export class GameRoom extends Server<Env> {
       const name =
         BOT_NAMES.find((b) => !used.has(b.toLowerCase())) ??
         `Bot ${this.room.players.filter((p) => p.isBot).length + 1}`;
+      // Cycle levels so multiple bots aren't all the same by default
+      const cycle: AiStyle[] = ["easy", "solid", "sharp", "wild"];
+      const existingBots = this.room.players.filter((p) => p.isBot).length;
+      const botStyle = cycle[existingBots % cycle.length] ?? this.room.aiStyle;
       this.room.players.push({
         id: crypto.randomUUID(),
         name,
         connectionId: null,
         isBot: true,
+        aiStyle: botStyle,
       });
       added++;
     }
@@ -769,6 +848,10 @@ export class GameRoom extends Server<Env> {
       return;
     }
     this.room.aiStyle = style;
+    // Apply as default to every bot (host can still override per bot)
+    for (const p of this.room.players) {
+      if (p.isBot) p.aiStyle = style;
+    }
     await this.persist();
     this.broadcastRoom();
     const labels: Record<AiStyle, string> = {
@@ -779,11 +862,60 @@ export class GameRoom extends Server<Env> {
     };
     this.broadcastJson({
       type: "toast",
-      message: `AI style: ${labels[style]}`,
+      message: `All bots → ${labels[style]} (change each bot in the list)`,
     });
   }
 
-  private async handleStart(connection: Connection) {
+  private async handleSetBotAiStyle(
+    connection: Connection,
+    botId: string,
+    style: AiStyle,
+  ) {
+    const playerId = (connection.state as ConnState | undefined)?.playerId;
+    if (!playerId || playerId !== this.room.hostId) {
+      this.send(connection, { type: "error", message: "Only the host can set bot level" });
+      return;
+    }
+    if (!isAiStyle(style)) {
+      this.send(connection, { type: "error", message: "Unknown AI style" });
+      return;
+    }
+    const bot = this.room.players.find((p) => p.id === botId && p.isBot);
+    if (!bot) {
+      this.send(connection, { type: "error", message: "Bot not found" });
+      return;
+    }
+    bot.aiStyle = style;
+    await this.persist();
+    this.broadcastRoom();
+    const labels: Record<AiStyle, string> = {
+      easy: "Easy",
+      solid: "Solid",
+      sharp: "Sharp",
+      wild: "Wild",
+    };
+    this.broadcastJson({
+      type: "toast",
+      message: `${bot.name} → ${labels[style]}`,
+    });
+  }
+
+  private async handleSetTightDeck(connection: Connection, tightDeck: boolean) {
+    const playerId = (connection.state as ConnState | undefined)?.playerId;
+    if (!playerId || playerId !== this.room.hostId) {
+      this.send(connection, { type: "error", message: "Only the host can change deck mode" });
+      return;
+    }
+    if (this.room.status !== "lobby") {
+      this.send(connection, { type: "error", message: "Can only change deck before start" });
+      return;
+    }
+    this.room.tightDeck = Boolean(tightDeck);
+    await this.persist();
+    this.broadcastRoom();
+  }
+
+  private async handleStart(connection: Connection, tightDeckMsg?: boolean) {
     const playerId = (connection.state as ConnState | undefined)?.playerId;
     if (!playerId || playerId !== this.room.hostId) {
       this.send(connection, { type: "error", message: "Only the host can start" });
@@ -805,19 +937,36 @@ export class GameRoom extends Server<Env> {
       return;
     }
 
+    if (typeof tightDeckMsg === "boolean") {
+      this.room.tightDeck = tightDeckMsg;
+    }
+
     this.room.seats = this.room.players.map((p) => p.id);
     const names = this.room.players.map((p) => p.name);
-    this.room.game = setup(names.length, { points: 66, handSize: 10 }, undefined, names);
+    const n = names.length;
+    this.room.game = setup(
+      n,
+      {
+        points: 66,
+        handSize: 10,
+        tightDeck: this.room.tightDeck,
+      },
+      undefined,
+      names,
+    );
     this.room.status = "playing";
     await this.persist();
     this.broadcastRoom();
     this.pushGameState();
     const styleLabel = this.room.aiStyle;
+    const deckNote = this.room.tightDeck
+      ? `tight deck 1–${n * 10 + 4}`
+      : "full deck 1–104";
     this.broadcastJson({
       type: "toast",
       message: this.apiKey()
-        ? `Game started — Gemini (${styleLabel}) thinking…`
-        : `Game started — bots (${styleLabel} heuristic; set GEMINI_API_KEY for smarter AI)`,
+        ? `Game started (${deckNote}) — Gemini (${styleLabel})…`
+        : `Game started (${deckNote}) — bots (${styleLabel})`,
     });
     await this.runBots();
   }

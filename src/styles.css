@@ -19,14 +19,20 @@
   box-sizing: border-box;
 }
 
-html,
-body,
-#root {
+html {
   min-height: 100%;
+  /* Keep document as the scroll container */
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 body {
   margin: 0;
+  min-height: 100%;
+  /* Do not lock body height — page must scroll */
+  overflow-x: hidden;
+  overflow-y: visible;
   font-family:
     "Segoe UI",
     system-ui,
@@ -37,6 +43,11 @@ body {
   color: var(--cream);
   padding-left: env(safe-area-inset-left, 0px);
   padding-right: env(safe-area-inset-right, 0px);
+}
+
+#root {
+  min-height: 100%;
+  overflow: visible;
 }
 
 button {
@@ -209,7 +220,9 @@ input {
   align-items: center;
   flex-wrap: nowrap;
   overflow-x: auto;
+  overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
   scrollbar-width: thin;
 }
 
@@ -268,11 +281,11 @@ input {
   right: 0;
   bottom: 0;
   z-index: 40;
-  padding: 0.5rem 0.75rem calc(0.5rem + var(--safe-bottom));
+  padding: 0.4rem 0 calc(0.4rem + var(--safe-bottom));
   background: linear-gradient(
     180deg,
     rgba(2, 6, 23, 0) 0%,
-    rgba(7, 38, 29, 0.94) 14%,
+    rgba(7, 38, 29, 0.94) 12%,
     rgba(7, 38, 29, 0.98) 100%
   );
   border-top: 1px solid rgba(248, 244, 232, 0.12);
@@ -282,40 +295,79 @@ input {
 
 .hand-dock-inner {
   max-width: 80rem;
+  width: 100%;
+  min-width: 0;
   margin: 0 auto;
+  padding: 0 0.65rem;
+  box-sizing: border-box;
+}
+
+/* Constrain width so .hand-scroll can overflow-x */
+.hand-dock .felt-panel {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .hand-scroll {
   display: flex;
   flex-wrap: nowrap;
-  gap: 0.35rem;
+  /* IMPORTANT: flex-start, not center — center breaks scroll range on overflow */
+  justify-content: flex-start;
+  align-items: flex-end;
+  gap: 0.4rem;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
-  /* Horizontal hand browse should not trigger browser back / page swipe */
   overscroll-behavior-x: contain;
+  /* Prefer horizontal pan so all 10 cards are reachable */
   touch-action: pan-x;
-  padding: 0.35rem 0.15rem 0.35rem;
+  padding: 0.45rem 0.15rem 0.55rem;
+  scroll-padding-inline: 0.5rem;
   scrollbar-width: thin;
 }
 
-/* Slight fan overlap so more cards fit */
+.hand-scroll > * {
+  flex: 0 0 auto;
+}
+
+/* Edge spacers so first/last card can scroll fully into view */
+.hand-scroll::before,
+.hand-scroll::after {
+  content: "";
+  flex: 0 0 0.25rem;
+}
+
+/* Slight fan overlap so more cards fit — keep first card full */
 @media (max-width: 639px) {
-  .hand-scroll .card:not(:first-child) {
-    margin-left: -0.45rem;
+  .hand-scroll {
+    gap: 0;
+  }
+
+  .hand-scroll .card {
+    margin-right: 0.2rem;
+  }
+
+  .hand-scroll .card:not(:first-of-type) {
+    margin-left: -0.35rem;
   }
 
   .hand-scroll .card--selectable:active,
   .hand-scroll .card--selected {
     position: relative;
     z-index: 2;
+    margin-left: 0.1rem;
+    margin-right: 0.25rem;
   }
 }
 
-/* Room for fixed dock + status strip so bottom content (scoring) is scrollable */
+/* Room for fixed hand dock so table/content can scroll above it */
 @media (max-width: 1023px) {
   .play-shell--with-hand {
-    /* hand cards + ready strip + safe area — enough to scroll past dock */
-    padding-bottom: calc(14.5rem + var(--safe-bottom));
+    padding-bottom: calc(11rem + var(--safe-bottom));
   }
 }
 
@@ -332,13 +384,35 @@ input {
     backdrop-filter: none;
   }
 
-  .hand-scroll {
-    flex-wrap: wrap;
+  .hand-dock {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .hand-dock-inner {
+    padding: 0;
+  }
+
+  .hand-dock .felt-panel {
     overflow: visible;
   }
 
-  .hand-scroll .card:not(:first-child) {
+  .hand-scroll {
+    flex-wrap: wrap;
+    overflow: visible;
+    touch-action: manipulation;
+    justify-content: flex-start;
+  }
+
+  .hand-scroll::before,
+  .hand-scroll::after {
+    display: none;
+  }
+
+  .hand-scroll .card,
+  .hand-scroll .card:not(:first-of-type) {
     margin-left: 0;
+    margin-right: 0;
   }
 
   .play-shell--with-hand {
@@ -366,32 +440,35 @@ input {
   }
 }
 
-/* Score / rules popover — floats over the board, does not push table rows */
-.score-overlay {
+/* Dim page behind history / rules */
+.score-overlay-backdrop {
   position: fixed;
-  z-index: 50;
-  left: 0.75rem;
-  right: 0.75rem;
-  top: auto;
-  bottom: calc(9.5rem + env(safe-area-inset-bottom, 0px));
-  max-width: 22rem;
-  margin: 0 auto;
-  padding: 0.75rem 0.9rem;
-  border-radius: 0.85rem;
-  border: 1px solid rgba(248, 244, 232, 0.15);
-  background: rgba(7, 38, 29, 0.96);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(12px);
+  inset: 0;
+  z-index: 90;
+  border: none;
+  margin: 0;
+  padding: 0;
+  background: rgba(2, 6, 23, 0.55);
+  cursor: pointer;
 }
 
-@media (min-width: 1024px) {
-  .score-overlay {
-    left: auto;
-    right: 1.25rem;
-    top: 5.5rem;
-    bottom: auto;
-    margin: 0;
-  }
+/* Centered popover — always visible above hand dock */
+.score-overlay {
+  position: fixed;
+  z-index: 100;
+  left: 50%;
+  top: 45%;
+  transform: translate(-50%, -50%);
+  width: min(22rem, calc(100vw - 1.5rem));
+  max-height: min(70vh, 22rem);
+  overflow: auto;
+  margin: 0;
+  padding: 0.85rem 1rem;
+  border-radius: 0.85rem;
+  border: 1px solid rgba(248, 244, 232, 0.18);
+  background: rgba(7, 38, 29, 0.98);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(12px);
 }
 
 /* Score chips: horizontal scroll on mobile */
@@ -416,8 +493,15 @@ input {
   }
 }
 
+/* Page shell must grow with content so the document can scroll */
+.app-shell {
+  overflow: visible;
+  /* flex-col + min-height is fine; never lock height to 100vh only */
+}
+
 /* Playing screen: room for sticky hand */
 .play-shell {
+  overflow: visible;
   padding-bottom: calc(0.5rem + var(--safe-bottom));
 }
 
@@ -429,18 +513,19 @@ input {
 
 .app-shell--playing {
   padding-top: max(0.75rem, var(--safe-top));
+  /* Extra bottom space so last content clears the fixed hand dock */
   padding-bottom: 0;
-  /* Reduce edge-swipe back fighting the hand */
-  overscroll-behavior-x: none;
+  overflow: visible;
 }
 
 .header--compact {
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
 }
 
 .header--compact h1 {
-  font-size: 1.25rem;
-  margin-top: 0.15rem;
+  font-size: 1.2rem;
+  margin-top: 0;
+  line-height: 1.2;
 }
 
 .header--compact .brand-line {

@@ -16,6 +16,9 @@ type Props = {
   onAddBots: (count: number) => void;
   onRemoveBot: () => void;
   onSetAiStyle: (style: AiStyle) => void;
+  onSetBotAiStyle: (botId: string, style: AiStyle) => void;
+  tightDeck: boolean;
+  onSetTightDeck: (tight: boolean) => void;
   onLeave: () => void;
 };
 
@@ -32,12 +35,16 @@ export function Lobby({
   onAddBots,
   onRemoveBot,
   onSetAiStyle,
+  onSetBotAiStyle,
+  tightDeck,
+  onSetTightDeck,
   onLeave,
 }: Props) {
   const isHost = youId === hostId;
   const botCount = players.filter((p) => p.isBot).length;
   const canStart = isHost && players.length >= 2;
   const canAddBot = isHost && players.length < maxPlayers;
+  const deckTop = players.length * 10 + 4;
   const styleMeta = AI_STYLES.find((s) => s.id === aiStyle) ?? AI_STYLES[1];
   const shareUrl =
     typeof window !== "undefined"
@@ -84,23 +91,32 @@ export function Lobby({
                 <span className="ml-2 text-xs text-sky-300">AI</span>
               ) : null}
             </span>
-            <span
-              className={`text-xs ${
-                p.isBot
-                  ? "text-sky-400"
-                  : p.connected
-                    ? "text-emerald-400"
-                    : "text-slate-400"
-              }`}
-            >
-              {p.isBot
-                ? hasAiKey
-                  ? `Gemini · ${styleMeta.label}`
-                  : `heuristic · ${styleMeta.label}`
-                : p.connected
-                  ? "online"
-                  : "away"}
-            </span>
+            {p.isBot ? (
+              isHost ? (
+                <select
+                  className="rounded-lg border border-sky-400/30 bg-black/40 px-2 py-1 text-xs text-sky-100 outline-none"
+                  value={p.aiStyle ?? aiStyle}
+                  onChange={(e) => onSetBotAiStyle(p.id, e.target.value as AiStyle)}
+                  aria-label={`${p.name} difficulty`}
+                >
+                  {AI_STYLES.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                      {hasAiKey ? " · Gemini" : " · local"}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="text-xs text-sky-400">
+                  {(AI_STYLES.find((s) => s.id === (p.aiStyle ?? aiStyle)) ?? styleMeta).label}
+                  {hasAiKey ? " · Gemini" : " · local"}
+                </span>
+              )
+            ) : (
+              <span className={`text-xs ${p.connected ? "text-emerald-400" : "text-slate-400"}`}>
+                {p.connected ? "online" : "away"}
+              </span>
+            )}
           </li>
         ))}
       </ul>
@@ -163,8 +179,49 @@ export function Lobby({
 
       <div className="mb-4">
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-emerald-100/80">
-          How well should Gemini play?
+          Deck
         </h2>
+        <button
+          type="button"
+          disabled={!isHost}
+          onClick={() => onSetTightDeck(!tightDeck)}
+          className={`flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left transition ${
+            tightDeck
+              ? "border-amber-300/70 bg-amber-400/15 ring-1 ring-amber-300/40"
+              : "border-white/10 bg-black/20 hover:bg-white/5"
+          } disabled:opacity-60`}
+        >
+          <span
+            className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border text-xs ${
+              tightDeck
+                ? "border-amber-300 bg-amber-400 text-slate-900"
+                : "border-white/25 text-transparent"
+            }`}
+            aria-hidden
+          >
+            ✓
+          </span>
+          <span>
+            <span className="block text-sm font-semibold text-emerald-50">Tight deck</span>
+            <span className="mt-0.5 block text-xs leading-snug text-emerald-100/55">
+              {tightDeck
+                ? `On — only cards 1–${deckTop} (10×${players.length} players + 4 row starters). Denser, more collisions.`
+                : "Off — full official deck 1–104."}
+            </span>
+          </span>
+        </button>
+        {!isHost ? (
+          <p className="mt-1.5 text-xs text-emerald-100/45">Host chooses deck mode before start.</p>
+        ) : null}
+      </div>
+
+      <div className="mb-4">
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-emerald-100/80">
+          Default bot level
+        </h2>
+        <p className="mb-2 text-xs text-emerald-100/50">
+          Each bot can use a different level in the list above. This sets all bots at once.
+        </p>
         <div className="grid grid-cols-2 gap-2">
           {AI_STYLES.map((s) => {
             const selected = aiStyle === s.id;
@@ -187,7 +244,7 @@ export function Lobby({
           })}
         </div>
         {!isHost ? (
-          <p className="mt-2 text-xs text-emerald-100/45">Host picks AI style for the table.</p>
+          <p className="mt-2 text-xs text-emerald-100/45">Host sets bot levels.</p>
         ) : null}
       </div>
 
