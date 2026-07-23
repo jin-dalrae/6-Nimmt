@@ -3,6 +3,8 @@ import { MoveName, Phase, type PublicGameState } from "./types";
 export type ActivityItem = {
   id: string;
   text: string;
+  /** Extra “why” line shown under the alert / Hits entry */
+  detail?: string;
   tone?: "info" | "warn" | "good" | "hot";
 };
 
@@ -165,7 +167,7 @@ function describeRowTake(
   playerNext: PublicGameState["players"][0],
   cardsTaken: number,
   bulls: number,
-): string {
+): { text: string; detail?: string } {
   const name = who(playerNext);
   const played =
     playerPrev.faceDownCard && playerPrev.faceDownCard.number > 0
@@ -189,6 +191,8 @@ function describeRowTake(
   const ends = prev.rows
     .map((row) => row[row.length - 1]?.number)
     .filter((n): n is number => n != null);
+  const endsLabel =
+    ends.length > 0 ? ends.slice().sort((a, b) => a - b).join(", ") : "—";
   const lower = played != null ? ends.filter((e) => e < played) : [];
   const tooLow = played != null && lower.length === 0;
   const closestEnd = lower.length > 0 ? Math.max(...lower) : null;
@@ -209,12 +213,25 @@ function describeRowTake(
   const endOfTaken =
     takenRow.length > 0 ? takenRow[takenRow.length - 1]?.number : null;
 
+  const handSize = next.handSize || 10;
+  // After this take, cards left are roughly post-place; use prev for “which trick”
+  const lateDeal = trickNumber(prev) >= Math.max(1, handSize - 2);
+  const lateNote = lateDeal
+    ? " Late in the deal, rows fill up and leftover low cards often have nowhere to go."
+    : "";
+
   // Rule 3 — full row (6th card)
   if (played != null && fullRow && closestEnd != null) {
     if (playerNext.isYou) {
-      return `Your #${played} fit closest to #${closestEnd}, but that row was full (5/5) — 6th card takes the row: ${bullsWord(bulls)} (${cardsWord(cardsTaken)})`;
+      return {
+        text: `You took ${cardsWord(cardsTaken)} (${bullsWord(bulls)}) — 6th card on a full row`,
+        detail: `Why: #${played} must go on the closest lower end (#${closestEnd}), but that row was already 5/5. The 6th card always takes the whole row; your #${played} starts it. No choice and no switch.${lateNote}`,
+      };
     }
-    return `${name}: #${played} was 6th on full row (closest #${closestEnd}) — got ${bullsWord(bulls)}`;
+    return {
+      text: `${name}: #${played} was 6th on full row (closest #${closestEnd}) — ${bullsWord(bulls)}`,
+      detail: `That row was already 5/5, so the 6th card takes all ${cardsWord(cardsTaken)}.`,
+    };
   }
 
   // Rule 4 — lowest card: choose any row
@@ -224,16 +241,27 @@ function describeRowTake(
         ? `${rowLabel} (was ending #${endOfTaken})`
         : rowLabel;
     if (playerNext.isYou) {
-      return `Your #${played} was lower than every row end — you chose ${which}: ${cardsWord(cardsTaken)} for ${bullsWord(bulls)}`;
+      return {
+        text: `You took ${cardsWord(cardsTaken)} (${bullsWord(bulls)}) — card too low for every row`,
+        detail: `Why: #${played} is lower than every row end (${endsLabel}), so it can’t sit on the table. You take one whole row (${which}); #${played} starts it. Next time: spend low cards earlier, or switch to another hand card when this happens.${lateNote}`,
+      };
     }
-    return `${name}: #${played} too low for every row — took ${which}: ${bullsWord(bulls)}`;
+    return {
+      text: `${name}: #${played} too low for every row — took ${which}: ${bullsWord(bulls)}`,
+      detail: `Row ends were ${endsLabel}; #${played} fit nowhere.`,
+    };
   }
 
   // Fallback
   if (playerNext.isYou) {
-    return `You took ${cardsWord(cardsTaken)} from ${rowLabel} for ${bullsWord(bulls)} · total ${playerNext.points} 🐂`;
+    return {
+      text: `You took ${cardsWord(cardsTaken)} from ${rowLabel} for ${bullsWord(bulls)} · total ${playerNext.points} 🐂`,
+      detail: `Those cards’ bull heads are added to your score. Fewest 🐂 wins.${lateNote}`,
+    };
   }
-  return `${name} took ${cardsWord(cardsTaken)} for ${bullsWord(bulls)} · total ${playerNext.points} 🐂`;
+  return {
+    text: `${name} took ${cardsWord(cardsTaken)} for ${bullsWord(bulls)} · total ${playerNext.points} 🐂`,
+  };
 }
 
 /**
@@ -277,7 +305,7 @@ export function diffActivity(
     const bulls = b.points - a.points;
 
     if (cardsTaken > 0 || bulls > 0) {
-      const text = describeRowTake(
+      const { text, detail } = describeRowTake(
         prev,
         next,
         a,
@@ -289,6 +317,7 @@ export function diffActivity(
       out.push({
         id: ts(),
         text,
+        detail,
         tone: "hot",
       });
 

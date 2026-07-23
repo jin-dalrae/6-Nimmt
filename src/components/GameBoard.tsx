@@ -8,6 +8,7 @@ import {
   type ActivityItem,
 } from "../game/activity";
 import { AI_STYLES } from "../game/ai";
+import { getCard } from "../game/card";
 import type { SpectatorInfo } from "../game/protocol";
 import { MoveName, Phase, type PublicGameState } from "../game/types";
 import { CardView } from "./CardView";
@@ -79,6 +80,8 @@ export function GameBoard({
   const watchers = spectators.filter((s) => s.connected);
 
   const prevGame = useRef<PublicGameState | null>(null);
+  /** Card numbers revealed this trick (kept after a card is placed so order stays low→high). */
+  const trickCardNumbers = useRef<Map<number, number>>(new Map());
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [logOpen, setLogOpen] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -91,6 +94,31 @@ export function GameBoard({
     setHeaderSlot(document.getElementById("game-header-actions"));
   }, []);
 
+  // Track each player's card number for this trick so the strip can stay sorted low→high
+  // even after lower cards have already been placed (faceDownCard cleared).
+  if (game.phase === Phase.ChooseCard && !game.ended) {
+    trickCardNumbers.current = new Map();
+  } else {
+    for (let i = 0; i < game.players.length; i++) {
+      const n = game.players[i]?.faceDownCard?.number ?? 0;
+      if (n > 0) trickCardNumbers.current.set(i, n);
+    }
+  }
+
+  const trickOrder = game.players
+    .map((p, i) => ({
+      p,
+      i,
+      n: trickCardNumbers.current.get(i) ?? p.faceDownCard?.number ?? 0,
+    }))
+    .sort((a, b) => {
+      // Known card numbers: low → high (placement order)
+      if (a.n > 0 && b.n > 0) return a.n - b.n;
+      if (a.n > 0) return -1;
+      if (b.n > 0) return 1;
+      return a.i - b.i;
+    });
+
   useEffect(() => {
     const events = diffActivity(prevGame.current, game);
     prevGame.current = game;
@@ -98,8 +126,13 @@ export function GameBoard({
 
     setActivity((log) => [...events.reverse(), ...log].slice(0, 12));
 
-    // Status pill: row-takes first, then new-deal / game-over news
+    // Status pill: prefer *your* row-take (with why), then any hit, then news
     const alert =
+      events.find(
+        (e) =>
+          e.tone === "hot" &&
+          (e.text.startsWith("You ") || e.text.startsWith("Your ")),
+      ) ??
       events.find((e) => e.tone === "hot") ??
       events.find((e) => e.tone === "good") ??
       events.find((e) => e.text.includes("got ") || e.text.includes("🐂")) ??
@@ -107,8 +140,9 @@ export function GameBoard({
     if (alert) {
       setStatusAlert(alert);
       if (alertTimer.current) clearTimeout(alertTimer.current);
-      // New deals stay a bit longer so you notice the 10 cards
-      const ms = alert.tone === "good" ? 9000 : 7000;
+      // Hits with a “why” line stay longer so you can read them
+      const ms =
+        alert.detail ? 12000 : alert.tone === "good" ? 9000 : 7000;
       alertTimer.current = setTimeout(() => setStatusAlert(null), ms);
     }
   }, [game]);
@@ -128,9 +162,13 @@ export function GameBoard({
   const logItems = collectLog.length > 0 ? collectLog : activity;
 
   const statusPill = statusAlert
-    ? { text: statusAlert.text, tone: statusAlert.tone ?? "hot" }
+    ? {
+        text: statusAlert.text,
+        detail: statusAlert.detail,
+        tone: statusAlert.tone ?? "hot",
+      }
     : !game.ended
-      ? { text: status.headline, tone: status.tone }
+      ? { text: status.headline, detail: status.detail || undefined, tone: status.tone }
       : null;
 
   return (
@@ -203,7 +241,14 @@ export function GameBoard({
             } ${logOpen ? "ring-1 ring-amber-300/50" : "hover:brightness-110"}`}
             title="Tap for table collect history"
           >
-            <span className="status-alert-text">{statusPill.text}</span>
+            <span className="status-alert-text block">
+              <span className="font-semibold">{statusPill.text}</span>
+              {statusPill.detail ? (
+                <span className="mt-0.5 block font-normal opacity-90">
+                  {statusPill.detail}
+                </span>
+              ) : null}
+            </span>
             <span className="ml-1 font-normal text-emerald-100/30">▾</span>
           </button>
         ) : null}
@@ -269,20 +314,26 @@ export function GameBoard({
               </button>
             </div>
             {logItems.length > 0 ? (
-              <ul className="max-h-[min(50vh,16rem)] space-y-1.5 overflow-y-auto text-xs sm:text-sm">
+              <ul className="max-h-[min(50vh,16rem)] space-y-2 overflow-y-auto text-xs sm:text-sm">
                 {logItems.map((item) => (
                   <li key={item.id} className={`leading-snug ${toneClass[item.tone ?? "info"]}`}>
-                    · {item.text}
+                    <div className="font-medium">· {item.text}</div>
+                    {item.detail ? (
+                      <p className="mt-0.5 pl-2.5 text-[0.7rem] font-normal text-emerald-100/65 sm:text-xs">
+                        {item.detail}
+                      </p>
+                    ) : null}
                   </li>
                 ))}
               </ul>
             ) : (
               <p className="text-xs text-emerald-100/55">
-                No rows collected yet this game. Full-row takes and “too low” picks show up here.
+                No rows collected yet this game. Full-row takes and “too low” picks show up here —
+                each entry explains why those cards went to someone’s pile.
               </p>
             )}
             <p className="mt-2 text-[0.65rem] text-emerald-100/40">
-              Who took a row · why · bull heads
+              Who took a row · why (6th card vs too low) · bull heads
             </p>
           </div>
         </>
@@ -490,18 +541,39 @@ export function GameBoard({
                 {game.phase === Phase.PlaceCard ? "This trick (low → high)" : "Last cards"}
               </h2>
               <div className="flex flex-wrap gap-1.5 sm:gap-2">
-                {game.players.map((p, i) => (
-                  <div key={i} className="flex flex-col items-center gap-0.5">
-                    <CardView
-                      card={p.faceDownCard}
-                      hidden={!!p.faceDownCard && p.faceDownCard.number === 0}
-                      size="sm"
-                    />
-                    <span className="max-w-[3.2rem] truncate text-[0.6rem] text-emerald-100/70 sm:text-[0.65rem]">
-                      {p.name}
-                    </span>
-                  </div>
-                ))}
+                {trickOrder.map(({ p, i, n }) => {
+                  // After a card is placed, faceDownCard is cleared — show the remembered card
+                  // so the low→high strip still makes sense through the rest of the trick.
+                  const shown =
+                    p.faceDownCard && p.faceDownCard.number > 0
+                      ? p.faceDownCard
+                      : n > 0
+                        ? getCard(n)
+                        : p.faceDownCard;
+                  const placedAway = !p.faceDownCard && n > 0;
+                  return (
+                    <div
+                      key={i}
+                      className={`flex flex-col items-center gap-0.5 ${
+                        placedAway ? "opacity-45" : ""
+                      }`}
+                      title={
+                        placedAway
+                          ? `${p.name}: #${n} already placed`
+                          : undefined
+                      }
+                    >
+                      <CardView
+                        card={shown}
+                        hidden={!!shown && shown.number === 0}
+                        size="sm"
+                      />
+                      <span className="max-w-[3.2rem] truncate text-[0.6rem] text-emerald-100/70 sm:text-[0.65rem]">
+                        {p.name}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
               {game.phase === Phase.PlaceCard && !mustPickRow && !game.ended ? (
                 <p className="mt-1.5 text-[0.7rem] text-emerald-100/70">Placing…</p>
