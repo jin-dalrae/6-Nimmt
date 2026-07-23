@@ -57,37 +57,10 @@ export function Lobby({
 
   return (
     <div className="felt-panel w-full max-w-lg p-6 sm:p-8">
-      <div className="mb-6 text-center">
-        <p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">Room code</p>
-        <div className="mt-3 flex flex-col items-center gap-4 sm:flex-row sm:justify-center sm:gap-6">
-          <div>
-            <p className="font-mono text-4xl font-bold tracking-widest text-amber-300 sm:text-5xl">
-              {roomId}
-            </p>
-            <p className="mt-2 max-w-[14rem] break-all text-[0.7rem] leading-snug text-emerald-100/45">
-              Scan to join · or enter the code
-            </p>
-          </div>
-          <div className="rounded-2xl bg-white p-3 shadow-lg ring-1 ring-black/10">
-            <QRCodeSVG
-              value={shareUrl}
-              size={148}
-              level="M"
-              marginSize={1}
-              bgColor="#ffffff"
-              fgColor="#0f172a"
-              title={`Join room ${roomId}`}
-            />
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={copyLink}
-          className="mt-4 rounded-full border border-white/15 bg-white/5 px-4 py-1.5 text-sm text-emerald-100 hover:bg-white/10"
-        >
-          {copied ? "Link copied!" : "Copy invite link"}
-        </button>
-      </div>
+      <p className="mb-4 text-center text-sm text-emerald-100/60">
+        Room{" "}
+        <span className="font-mono font-semibold tracking-widest text-amber-300">{roomId}</span>
+      </p>
 
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-emerald-100/80">
         Players ({players.length}/{maxPlayers})
@@ -247,6 +220,39 @@ export function Lobby({
           className="rounded-xl border border-white/20 px-4 py-3 text-emerald-100 hover:bg-white/5"
         >
           Leave
+        </button>
+      </div>
+
+      {/* Invite block — below actions so play controls stay first */}
+      <div className="mt-6 border-t border-white/10 pt-5 text-center">
+        <p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">Room code</p>
+        <div className="mt-3 flex flex-col items-center gap-4 sm:flex-row sm:justify-center sm:gap-6">
+          <div>
+            <p className="font-mono text-4xl font-bold tracking-widest text-amber-300 sm:text-5xl">
+              {roomId}
+            </p>
+            <p className="mt-2 max-w-[14rem] break-all text-[0.7rem] leading-snug text-emerald-100/45">
+              Scan to join · or enter the code
+            </p>
+          </div>
+          <div className="rounded-2xl bg-white p-3 shadow-lg ring-1 ring-black/10">
+            <QRCodeSVG
+              value={shareUrl}
+              size={148}
+              level="M"
+              marginSize={1}
+              bgColor="#ffffff"
+              fgColor="#0f172a"
+              title={`Join room ${roomId}`}
+            />
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={copyLink}
+          className="mt-4 rounded-full border border-white/15 bg-white/5 px-4 py-1.5 text-sm text-emerald-100 hover:bg-white/10"
+        >
+          {copied ? "Link copied!" : "Copy invite link"}
         </button>
       </div>
     </div>
