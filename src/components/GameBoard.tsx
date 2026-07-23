@@ -139,48 +139,49 @@ export function GameBoard({
         !game.ended && !isSpectator ? "play-shell--with-hand" : ""
       }`}
     >
-      {/* Top: scores · turn · single-line status (no wrap) */}
-      <div className="felt-panel space-y-1 px-2.5 py-1.5 sm:px-3 sm:py-2">
-        <div className="flex items-center gap-2">
-          <div className="score-scroll min-w-0 flex-1">
-            {game.players.map((p, i) => (
-              <div
-                key={i}
-                className={`shrink-0 rounded-md px-2 py-0.5 text-xs sm:text-sm ${
-                  p.isYou ? "bg-amber-400/20 ring-1 ring-amber-300/50" : "bg-black/25"
-                }`}
-              >
-                <span className="font-semibold">
-                  {p.isBot ? "🤖 " : ""}
-                  {p.name}
+      {/* Top: all scores visible (wrap, no horizontal scroll) · turn · compact status */}
+      <div className="felt-panel space-y-1 px-2 py-1.5 sm:px-2.5 sm:py-1.5">
+        <div className="score-scroll">
+          {game.players.map((p, i) => (
+            <div
+              key={i}
+              className={`score-chip ${
+                p.isYou ? "score-chip--you" : ""
+              }`}
+              title={
+                p.isBot && p.aiStyle
+                  ? `${p.name} (${AI_STYLES.find((s) => s.id === p.aiStyle)?.label ?? p.aiStyle}) · ${p.points}🐂`
+                  : `${p.name} · ${p.points}🐂`
+              }
+            >
+              <span className="score-chip-name">
+                {p.isBot ? "🤖" : ""}
+                {p.name}
+              </span>
+              <span className="score-chip-pts tabular-nums">{p.points}🐂</span>
+              {game.phase === Phase.ChooseCard && !game.ended ? (
+                <span
+                  className={
+                    p.hasChosen ? "text-emerald-300" : "text-emerald-200/40"
+                  }
+                  aria-hidden
+                >
+                  {p.hasChosen ? "✓" : "…"}
                 </span>
-                {p.isBot && p.aiStyle ? (
-                  <span className="ml-1 text-[0.65rem] font-medium text-sky-300/90">
-                    {AI_STYLES.find((s) => s.id === p.aiStyle)?.label ?? p.aiStyle}
-                  </span>
-                ) : null}
-                <span className="ml-1 tabular-nums text-amber-200">{p.points}🐂</span>
-                {game.phase === Phase.ChooseCard && !game.ended ? (
-                  <span
-                    className={`ml-1 ${
-                      p.hasChosen ? "text-emerald-300" : "text-emerald-200/45"
-                    }`}
-                    title={p.hasChosen ? "Locked in" : "Still choosing"}
-                  >
-                    {p.hasChosen ? "✓" : "…"}
-                  </span>
-                ) : null}
-              </div>
-            ))}
-          </div>
-          <span className="shrink-0 text-[0.65rem] font-medium text-amber-200/90 sm:text-xs">
+              ) : null}
+            </div>
+          ))}
+        </div>
+
+        <div className="flex items-center justify-between gap-2">
+          <span className="min-w-0 truncate text-[0.6rem] font-medium text-amber-200/90 sm:text-[0.65rem]">
             {turnLine}
             {game.tightDeck ? (
               <span className="ml-1 font-normal text-sky-300/80">· tight</span>
             ) : null}
           </span>
           {watchers.length > 0 ? (
-            <span className="hidden shrink-0 text-[0.6rem] text-sky-200/75 sm:inline">
+            <span className="shrink-0 text-[0.55rem] text-sky-200/75 sm:text-[0.6rem]">
               👁 {watchers.map((s) => s.name).join(", ")}
             </span>
           ) : null}
@@ -195,13 +196,15 @@ export function GameBoard({
               setRulesOpen(false);
               setLogOpen(true);
             }}
-            className={`status-alert block w-full cursor-pointer overflow-x-auto whitespace-nowrap rounded-md border px-2 py-1.5 text-left text-[0.7rem] font-semibold leading-none sm:text-xs ${bannerTone[statusPill.tone]} ${
+            className={`status-alert block w-full cursor-pointer rounded border px-1.5 py-0.5 text-left text-[0.58rem] font-medium leading-snug sm:text-[0.62rem] ${bannerTone[statusPill.tone]} ${
               statusAlert ? "status-alert--hit" : ""
-            } ${logOpen ? "ring-2 ring-amber-300/50" : "hover:brightness-110"}`}
+            } ${
+              statusPill.tone === "hot" ? "status-alert--hot" : ""
+            } ${logOpen ? "ring-1 ring-amber-300/50" : "hover:brightness-110"}`}
             title="Tap for table collect history"
           >
-            {statusPill.text}
-            <span className="ml-2 font-normal text-emerald-100/35">▾</span>
+            <span className="status-alert-text">{statusPill.text}</span>
+            <span className="ml-1 font-normal text-emerald-100/30">▾</span>
           </button>
         ) : null}
       </div>
