@@ -42,6 +42,53 @@ export function dealLabel(game: PublicGameState): string {
   return `Deal ${game.round}`;
 }
 
+/**
+ * Compact “who locked in” line for the status pill footer
+ * (keeps the main alert free for take explanations / your action).
+ */
+export function lockStatusLine(game: PublicGameState): string | null {
+  if (game.ended) return null;
+
+  const watching = game.yourIndex < 0;
+  const you = watching ? undefined : game.players[game.yourIndex];
+  const ready = game.players.filter((p) => p.hasChosen).length;
+  const total = game.players.length;
+  const waiting = game.players.filter((p) => !p.hasChosen);
+  const readyOthers = game.players.filter((p) => p.hasChosen && !p.isYou);
+  const stillOut = game.players.filter((p) => !p.hasChosen && !p.isYou);
+
+  if (game.phase === Phase.ChooseCard) {
+    if (watching) {
+      return `${ready}/${total} locked in`;
+    }
+    if (!you?.hasChosen) {
+      if (readyOthers.length === 0) {
+        return ready === 0
+          ? `0/${total} locked — pick a card`
+          : `${ready}/${total} locked — your turn`;
+      }
+      if (stillOut.length === 0) {
+        return `${readyOthers.length} locked — your turn`;
+      }
+      return `${readyOthers.length} locked · still out: you + ${stillOut.map((p) => p.name).join(", ")}`;
+    }
+    if (waiting.length > 0) {
+      return `Waiting: ${waiting.map((p) => p.name).join(", ")} · ${ready}/${total} locked`;
+    }
+    return `${ready}/${total} locked`;
+  }
+
+  if (game.phase === Phase.PlaceCard) {
+    const left = game.players.filter((p) => p.faceDownCard).length;
+    if (left <= 0) return null;
+    return left === 1
+      ? "1 card still placing"
+      : `${left} cards still placing · low → high`;
+  }
+
+  return null;
+}
+
 export function phaseStatus(game: PublicGameState): {
   headline: string;
   detail: string;
@@ -57,18 +104,13 @@ export function phaseStatus(game: PublicGameState): {
 
   const watching = game.yourIndex < 0;
   const you = watching ? undefined : game.players[game.yourIndex];
-  const ready = game.players.filter((p) => p.hasChosen).length;
-  const total = game.players.length;
-  const waiting = game.players.filter((p) => !p.hasChosen);
-  const readyOthers = game.players.filter((p) => p.hasChosen && !p.isYou);
-  const stillOut = game.players.filter((p) => !p.hasChosen && !p.isYou);
   const overThreshold = game.players.filter((p) => p.points >= game.pointsToEnd);
 
   if (watching) {
     if (game.phase === Phase.ChooseCard) {
       return {
         headline: "Watching — players picking cards",
-        detail: `${ready}/${total} locked in. You'll join the lobby for the next game.`,
+        detail: "You'll join the lobby for the next game.",
         tone: "info",
       };
     }
@@ -81,33 +123,25 @@ export function phaseStatus(game: PublicGameState): {
 
   const finalDealNote =
     game.thresholdReached && overThreshold.length > 0
-      ? ` Final deal — ${overThreshold.map((p) => `${p.name} ${p.points}`).join(", ")} ≥${game.pointsToEnd}.`
+      ? `Final deal — ${overThreshold.map((p) => `${p.name} ${p.points}`).join(", ")} ≥${game.pointsToEnd}.`
       : "";
 
   if (game.phase === Phase.ChooseCard) {
     if (!you?.hasChosen) {
-      if (readyOthers.length > 0) {
-        return {
-          headline: `${readyOthers.length} already locked in — your turn`,
-          detail:
-            (stillOut.length > 0
-              ? `Still waiting: you + ${stillOut.map((p) => p.name).join(", ")}.`
-              : "Everyone else is ready. Pick a card from your hand.") + finalDealNote,
-          tone: "hot",
-        };
-      }
       return {
         headline: game.thresholdReached
           ? "Final deal — pick a card"
           : "Pick a card to play",
-        detail: `Nobody locked in yet · ${ready}/${total} ready.${finalDealNote}`,
-        tone: game.thresholdReached ? "hot" : "info",
+        detail: finalDealNote || "Tap a card from your hand.",
+        tone: game.thresholdReached || game.players.some((p) => p.hasChosen && !p.isYou)
+          ? "hot"
+          : "info",
       };
     }
-    if (waiting.length > 0) {
+    if (game.players.some((p) => !p.hasChosen)) {
       return {
-        headline: "Card locked — waiting on others",
-        detail: `Waiting: ${waiting.map((p) => p.name).join(", ")} · ${ready}/${total} ready.${finalDealNote}`,
+        headline: "Card locked",
+        detail: finalDealNote || "Waiting for the rest of the table…",
         tone: "warn",
       };
     }

@@ -21,5 +21,12 @@
       "tag": "v1",
       "new_sqlite_classes": ["GameRoom"]
     }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nimmt6-stats",
+      "database_id": "56fe4893-8703-40b5-8233-a9ede0629f16"
+    }
   ]
 }

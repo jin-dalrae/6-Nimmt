@@ -25,6 +25,7 @@ import {
 import type { PublicGameState } from "./game/types";
 import { Lobby } from "./components/Lobby";
 import { GameBoard } from "./components/GameBoard";
+import { StatsPanel } from "./components/StatsPanel";
 import { MrJackApp } from "./mrjack/MrJackApp";
 
 function randomCode(): string {
@@ -523,6 +524,8 @@ function App() {
               </ul>
             </div>
           ) : null}
+
+          <StatsPanel />
 
           <p className="mt-6 text-center text-xs leading-relaxed text-emerald-100/50">
             Multiplayer: share the room code. Solo: play against Gemini bots (or heuristics

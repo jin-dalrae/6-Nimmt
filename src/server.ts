@@ -16,10 +16,12 @@ import {
   autoPlaceIfPossible,
   cloneGame,
   ended,
+  loserIndexes,
   move,
   setup,
   swapForcedCard,
   toPublicState,
+  winnerIndexes,
 } from "./game/engine";
 import type { GameState } from "./game/types";
 import { MoveName, Phase } from "./game/types";
@@ -29,6 +31,13 @@ import type {
   ServerMessage,
   SpectatorInfo,
 } from "./game/protocol";
+import {
+  buildStatsPayload,
+  logEvent,
+  logGameEnd,
+  logGameStart,
+  type StatsEventName,
+} from "./game/stats";
 
 export type RoomPresence = {
   roomId: string;
@@ -42,6 +51,8 @@ type Env = {
   GameRoom: DurableObjectNamespace<GameRoom>;
   ASSETS?: Fetcher;
   GEMINI_API_KEY?: string;
+  /** Analytics D1 — optional so local/dev without binding still runs */
+  DB?: D1Database;
 };
 
 type ConnState = {
@@ -84,6 +95,10 @@ type RoomData = {
    * period so idle tab / brief network drops can reconnect without wiping.
    */
   abandonedAt: number | null;
+  /** Analytics id for the active/last game in this room */
+  currentGameId: string | null;
+  /** Wall-clock when currentGameId started */
+  gameStartedAt: number | null;
 };
 
 /** Keep in-progress games alive after a disconnect (phones idle, WS blips). */
@@ -110,6 +125,8 @@ export class GameRoom extends Server<Env> {
     aiStyle: "solid",
     tightDeck: true,
     abandonedAt: null,
+    currentGameId: null,
+    gameStartedAt: null,
   };
 
   private botsBusy = false;
@@ -119,7 +136,7 @@ export class GameRoom extends Server<Env> {
   async onStart() {
     const saved = await this.ctx.storage.get<RoomData>("room");
     if (saved) {
-      // Migrate older rooms missing isBot / aiStyle / spectators / abandonedAt
+      // Migrate older rooms missing isBot / aiStyle / spectators / abandonedAt / game ids
       this.room = {
         ...saved,
         aiStyle: isAiStyle(saved.aiStyle) ? saved.aiStyle : "solid",
@@ -127,11 +144,98 @@ export class GameRoom extends Server<Env> {
         spectators: Array.isArray(saved.spectators) ? saved.spectators : [],
         abandonedAt:
           typeof saved.abandonedAt === "number" ? saved.abandonedAt : null,
+        currentGameId:
+          typeof saved.currentGameId === "string" ? saved.currentGameId : null,
+        gameStartedAt:
+          typeof saved.gameStartedAt === "number" ? saved.gameStartedAt : null,
         players: saved.players.map((p) => ({
           ...p,
           isBot: "isBot" in p ? Boolean((p as RoomPlayer).isBot) : false,
         })),
       };
+    }
+  }
+
+  private db(): D1Database | undefined {
+    return this.env.DB;
+  }
+
+  private async track(
+    event: StatsEventName,
+    opts: {
+      playerName?: string | null;
+      playerId?: string | null;
+      role?: "player" | "spectator" | "bot" | "system" | null;
+      meta?: Record<string, unknown> | null;
+      gameId?: string | null;
+    } = {},
+  ) {
+    await logEvent(this.db(), {
+      event,
+      roomId: this.name,
+      playerName: opts.playerName,
+      playerId: opts.playerId,
+      role: opts.role,
+      gameId: opts.gameId ?? this.room.currentGameId,
+      meta: opts.meta,
+    });
+  }
+
+  private async recordGameFinished(
+    G: GameState,
+    status: "ended" | "abandoned",
+  ) {
+    const gameId = this.room.currentGameId;
+    if (!gameId) return;
+    const winners = winnerIndexes(G).map((i) => G.players[i]?.name ?? `P${i}`);
+    const losers = loserIndexes(G).map((i) => G.players[i]?.name ?? `P${i}`);
+    const scores = G.players.map((p, i) => ({
+      name: p.name ?? `P${i}`,
+      points: p.points,
+      isBot: this.isBotSeat(i),
+    }));
+    const started = this.room.gameStartedAt ?? Date.now();
+    await logGameEnd(this.db(), {
+      gameId,
+      roomId: this.name,
+      status,
+      winnerNames: status === "ended" ? winners : [],
+      loserNames: status === "ended" ? losers : [],
+      scores,
+      deals: G.round,
+      durationMs: Math.max(0, Date.now() - started),
+      meta: {
+        pointsToEnd: G.options.points,
+        tightDeck: G.options.tightDeck,
+      },
+    });
+  }
+
+  /** Diff player scores for row-take analytics */
+  private async trackRowTakes(prev: GameState | null, next: GameState) {
+    if (!prev) return;
+    for (let i = 0; i < next.players.length; i++) {
+      const a = prev.players[i];
+      const b = next.players[i];
+      if (!a || !b) continue;
+      const bulls = b.points - a.points;
+      const cards =
+        (b.discard?.length ?? 0) - (a.discard?.length ?? 0);
+      if (bulls <= 0 && cards <= 0) continue;
+      const seatId = this.room.seats[i];
+      const roomPlayer = this.room.players.find((p) => p.id === seatId);
+      await this.track("row_take", {
+        playerName: b.name ?? roomPlayer?.name,
+        playerId: seatId,
+        role: roomPlayer?.isBot ? "bot" : "player",
+        meta: {
+          bulls,
+          cardsTaken: Math.max(0, cards),
+          pointsAfter: b.points,
+          deal: next.round,
+          isBot: Boolean(roomPlayer?.isBot),
+        },
+      });
     }
   }
 
@@ -312,11 +416,18 @@ export class GameRoom extends Server<Env> {
       }
     }
 
+    // Log abandon before wiping board
+    if (this.room.game && this.room.currentGameId) {
+      await this.recordGameFinished(this.room.game, "abandoned");
+    }
+
     this.room.status = "lobby";
     this.room.game = null;
     this.room.seats = [];
     this.room.spectators = [];
     this.room.abandonedAt = null;
+    this.room.currentGameId = null;
+    this.room.gameStartedAt = null;
     // Drop ghost humans; keep bots for a quick rematch if desired
     this.room.players = this.room.players.filter((p) => p.isBot);
     this.room.hostId =
@@ -421,11 +532,14 @@ export class GameRoom extends Server<Env> {
   }
 
   private async applyAndContinue(next: GameState) {
+    const prev = this.room.game ? cloneGame(this.room.game) : null;
+    await this.trackRowTakes(prev, next);
     this.room.game = next;
     if (ended(next)) this.room.status = "ended";
     await this.persist();
     this.pushGameState();
     if (this.room.status === "ended") {
+      await this.recordGameFinished(next, "ended");
       this.broadcastRoom();
       this.broadcastJson({ type: "toast", message: "Game over!" });
       return;
@@ -503,9 +617,12 @@ export class GameRoom extends Server<Env> {
             next = autoPlaceIfPossible(next);
           }
 
+          const prevChoose = this.room.game ? cloneGame(this.room.game) : null;
+          await this.trackRowTakes(prevChoose, next);
           this.room.game = next;
           if (ended(next)) {
             this.room.status = "ended";
+            await this.recordGameFinished(next, "ended");
             await this.persist();
             this.pushGameState();
             this.broadcastRoom();
@@ -563,9 +680,12 @@ export class GameRoom extends Server<Env> {
         );
         next = autoPlaceIfPossible(next);
 
+        const prevPlace = this.room.game ? cloneGame(this.room.game) : null;
+        await this.trackRowTakes(prevPlace, next);
         this.room.game = next;
         if (ended(next)) {
           this.room.status = "ended";
+          await this.recordGameFinished(next, "ended");
           await this.persist();
           this.pushGameState();
           this.broadcastRoom();
@@ -683,6 +803,13 @@ export class GameRoom extends Server<Env> {
         player.connectionId = null;
       }
     }
+
+    await this.track("player_disconnect", {
+      playerName: st.name,
+      playerId,
+      role: st.role,
+      meta: { status: this.room.status },
+    });
 
     if (this.room.status === "lobby") {
       // Keep bots; drop only disconnected humans
@@ -804,6 +931,12 @@ export class GameRoom extends Server<Env> {
             ? `Rejoined room ${this.name}`
             : "Reconnected to your seat",
         );
+        await this.track("player_rejoin", {
+          playerName: byTokenPlayer.name,
+          playerId: byTokenPlayer.id,
+          role: "player",
+          meta: { via: "sessionToken", status: this.room.status },
+        });
         return;
       }
       const byTokenSpec = this.room.spectators.find((s) => s.sessionToken === token);
@@ -812,6 +945,12 @@ export class GameRoom extends Server<Env> {
           byTokenSpec.name = name;
         }
         await this.bindSeat(connection, byTokenSpec, "spectator", "Back to watching");
+        await this.track("player_rejoin", {
+          playerName: byTokenSpec.name,
+          playerId: byTokenSpec.id,
+          role: "spectator",
+          meta: { via: "sessionToken", status: this.room.status },
+        });
         return;
       }
       // Stale token (room wiped / leave) — fall through as a fresh join
@@ -845,6 +984,12 @@ export class GameRoom extends Server<Env> {
           ? `Rejoined room ${this.name}`
           : "Reconnected to your seat",
       );
+      await this.track("player_rejoin", {
+        playerName: sameSeat.name,
+        playerId: sameSeat.id,
+        role: "player",
+        meta: { via: "name", status: this.room.status },
+      });
       return;
     }
 
@@ -875,6 +1020,12 @@ export class GameRoom extends Server<Env> {
         return;
       }
       await this.bindSeat(connection, sameSpec, "spectator", "Back to watching");
+      await this.track("player_rejoin", {
+        playerName: sameSpec.name,
+        playerId: sameSpec.id,
+        role: "spectator",
+        meta: { via: "name", status: this.room.status },
+      });
       return;
     }
 
@@ -909,6 +1060,12 @@ export class GameRoom extends Server<Env> {
             ? "Watching results — you'll join the lobby for the next game"
             : "You're watching — you'll be in the lobby for the next game",
       });
+      await this.track("spectator_join", {
+        playerName: name,
+        playerId: id,
+        role: "spectator",
+        meta: { status: this.room.status },
+      });
       return;
     }
 
@@ -920,6 +1077,8 @@ export class GameRoom extends Server<Env> {
 
     const id = crypto.randomUUID();
     const session = crypto.randomUUID();
+    const isFirstHuman =
+      this.room.players.filter((p) => !p.isBot).length === 0;
     this.room.players.push({
       id,
       name,
@@ -935,6 +1094,24 @@ export class GameRoom extends Server<Env> {
     await this.persist();
     this.broadcastRoom();
     this.send(connection, { type: "toast", message: `Joined room ${this.name}` });
+    if (isFirstHuman) {
+      await this.track("room_visit", {
+        playerName: name,
+        playerId: id,
+        role: "player",
+        meta: { firstHuman: true },
+      });
+    }
+    await this.track("player_join", {
+      playerName: name,
+      playerId: id,
+      role: "player",
+      meta: {
+        host: this.room.hostId === id,
+        playerCount: this.room.players.length,
+        botCount: this.room.players.filter((p) => p.isBot).length,
+      },
+    });
   }
 
   private async handleAddBots(connection: Connection, count: number) {
@@ -976,6 +1153,13 @@ export class GameRoom extends Server<Env> {
         type: "toast",
         message: added === 1 ? `Added ${this.room.players.at(-1)!.name}` : `Added ${added} bots`,
       });
+      await this.track("bot_add", {
+        role: "system",
+        meta: {
+          added,
+          botCount: this.room.players.filter((p) => p.isBot).length,
+        },
+      });
     }
   }
 
@@ -996,6 +1180,11 @@ export class GameRoom extends Server<Env> {
     await this.persist();
     this.broadcastRoom();
     this.broadcastJson({ type: "toast", message: `Removed ${removed.name}` });
+    await this.track("bot_remove", {
+      playerName: removed.name,
+      playerId: removed.id,
+      role: "bot",
+    });
   }
 
   private async handleSetAiStyle(connection: Connection, style: AiStyle) {
@@ -1009,6 +1198,10 @@ export class GameRoom extends Server<Env> {
       return;
     }
     this.room.aiStyle = style;
+    await this.track("ai_style", {
+      role: "system",
+      meta: { style, scope: "all_bots_default" },
+    });
     // Apply as default to every bot (host can still override per bot)
     for (const p of this.room.players) {
       if (p.isBot) p.aiStyle = style;
@@ -1074,6 +1267,10 @@ export class GameRoom extends Server<Env> {
     this.room.tightDeck = Boolean(tightDeck);
     await this.persist();
     this.broadcastRoom();
+    await this.track("tight_deck", {
+      role: "system",
+      meta: { tightDeck: this.room.tightDeck },
+    });
   }
 
   private async handleStart(connection: Connection, tightDeckMsg?: boolean) {
@@ -1105,6 +1302,12 @@ export class GameRoom extends Server<Env> {
     this.room.seats = this.room.players.map((p) => p.id);
     const names = this.room.players.map((p) => p.name);
     const n = names.length;
+    const humans = this.room.players.filter((p) => !p.isBot);
+    const bots = this.room.players.filter((p) => p.isBot);
+    const host = this.room.players.find((p) => p.id === this.room.hostId);
+    const gameId = crypto.randomUUID();
+    this.room.currentGameId = gameId;
+    this.room.gameStartedAt = Date.now();
     this.room.game = setup(
       n,
       {
@@ -1119,6 +1322,22 @@ export class GameRoom extends Server<Env> {
     await this.persist();
     this.broadcastRoom();
     this.pushGameState();
+    await logGameStart(this.db(), {
+      gameId,
+      roomId: this.name,
+      humanCount: humans.length,
+      botCount: bots.length,
+      playerCount: n,
+      tightDeck: this.room.tightDeck,
+      aiStyle: this.room.aiStyle,
+      hostName: host?.name ?? null,
+      playerNames: names,
+      meta: {
+        botNames: bots.map((b) => b.name),
+        humanNames: humans.map((h) => h.name),
+        hasGemini: Boolean(this.apiKey()),
+      },
+    });
     const styleLabel = this.room.aiStyle;
     const deckNote = this.room.tightDeck
       ? `tight deck 1–${n * 10 + 4}`
@@ -1188,8 +1407,15 @@ export class GameRoom extends Server<Env> {
 
     const who =
       this.room.players.find((p) => p.id === playerId)?.name ?? "Player";
+    const prevCard = this.room.game.players[idx]?.faceDownCard?.number;
     let next = swapForcedCard(cloneGame(this.room.game), idx, cardNumber);
     next = autoPlaceIfPossible(next);
+    await this.track("card_swap", {
+      playerName: who,
+      playerId,
+      role: "player",
+      meta: { from: prevCard, to: cardNumber },
+    });
     await this.applyAndContinue(next);
     this.broadcastJson({
       type: "toast",
@@ -1204,9 +1430,20 @@ export class GameRoom extends Server<Env> {
       return;
     }
 
+    // If host resets mid-game without a finished result, mark abandoned
+    if (
+      this.room.game &&
+      this.room.currentGameId &&
+      this.room.status === "playing"
+    ) {
+      await this.recordGameFinished(this.room.game, "abandoned");
+    }
+
     this.room.status = "lobby";
     this.room.game = null;
     this.room.seats = [];
+    this.room.currentGameId = null;
+    this.room.gameStartedAt = null;
 
     // Keep bots + connected seated humans
     let nextPlayers = this.room.players.filter(
@@ -1270,6 +1507,14 @@ export class GameRoom extends Server<Env> {
     const st = connection.state as ConnState | undefined;
     const playerId = st?.playerId;
     if (!playerId) return;
+
+    const leaveName = st.name;
+    await this.track("player_leave", {
+      playerName: leaveName,
+      playerId,
+      role: st.role,
+      meta: { status: this.room.status, explicit: true },
+    });
 
     if (st.role === "spectator") {
       this.room.spectators = this.room.spectators.filter((s) => s.id !== playerId);
@@ -1357,6 +1602,17 @@ export default {
           },
         },
       );
+    }
+
+    // Public analytics dashboard data: GET /api/stats
+    if (request.method === "GET" && url.pathname === "/api/stats") {
+      const stats = await buildStatsPayload(env.DB);
+      return Response.json(stats, {
+        headers: {
+          "Cache-Control": "public, max-age=15",
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
     }
 
     const party = await routePartykitRequest(request, env);

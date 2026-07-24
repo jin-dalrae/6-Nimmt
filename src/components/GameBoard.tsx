@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import {
   dealLabel,
   diffActivity,
+  lockStatusLine,
   phaseStatus,
   trickLabel,
   type ActivityItem,
@@ -85,10 +86,18 @@ export function GameBoard({
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [logOpen, setLogOpen] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
-  /** Shown in the top-right status pill (same slot as “your turn”) */
+  /** Sticky take / news shown in the status pill (not wiped by “your turn”) */
   const [statusAlert, setStatusAlert] = useState<ActivityItem | null>(null);
   const alertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevHasChosen = useRef(false);
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
+
+  const clearAlertTimer = () => {
+    if (alertTimer.current) {
+      clearTimeout(alertTimer.current);
+      alertTimer.current = null;
+    }
+  };
 
   useEffect(() => {
     setHeaderSlot(document.getElementById("game-header-actions"));
@@ -126,31 +135,45 @@ export function GameBoard({
 
     setActivity((log) => [...events.reverse(), ...log].slice(0, 12));
 
-    // Status pill: prefer *your* row-take (with why), then any hit, then news
-    const alert =
-      events.find(
-        (e) =>
-          e.tone === "hot" &&
-          (e.text.startsWith("You ") || e.text.startsWith("Your ")),
-      ) ??
-      events.find((e) => e.tone === "hot") ??
-      events.find((e) => e.tone === "good") ??
-      events.find((e) => e.text.includes("got ") || e.text.includes("🐂")) ??
-      null;
-    if (alert) {
-      setStatusAlert(alert);
-      if (alertTimer.current) clearTimeout(alertTimer.current);
-      // Hits with a “why” line stay longer so you can read them
-      const ms =
-        alert.detail ? 12000 : alert.tone === "good" ? 9000 : 7000;
-      alertTimer.current = setTimeout(() => setStatusAlert(null), ms);
-    }
+    // Prefer *your* row-take (with why). Don't let soft news steal a sticky “why” take.
+    const yourTake = events.find(
+      (e) =>
+        e.tone === "hot" &&
+        e.detail &&
+        (e.text.startsWith("You ") || e.text.startsWith("Your ")),
+    );
+    const anyTake = events.find((e) => e.tone === "hot");
+    const news = events.find((e) => e.tone === "good");
+    const alert = yourTake ?? anyTake ?? news ?? null;
+
+    if (!alert) return;
+
+    // Sticky take explanations stay until the next take, you lock a card, or a long safety timeout.
+    // Short-lived: deal news / simple toasts only.
+    const stickyWhy = Boolean(alert.detail && alert.tone === "hot");
+    setStatusAlert(alert);
+    clearAlertTimer();
+    const ms = stickyWhy ? 90_000 : alert.tone === "good" ? 9_000 : 7_000;
+    alertTimer.current = setTimeout(() => setStatusAlert(null), ms);
   }, [game]);
 
+  // After you lock in a card, release sticky take so “waiting on others” can show
   useEffect(() => {
-    return () => {
-      if (alertTimer.current) clearTimeout(alertTimer.current);
-    };
+    const locked = Boolean(you?.hasChosen);
+    if (
+      locked &&
+      !prevHasChosen.current &&
+      game.phase === Phase.ChooseCard &&
+      statusAlert?.detail
+    ) {
+      clearAlertTimer();
+      alertTimer.current = setTimeout(() => setStatusAlert(null), 2_000);
+    }
+    prevHasChosen.current = locked;
+  }, [you?.hasChosen, game.phase, statusAlert?.detail]);
+
+  useEffect(() => {
+    return () => clearAlertTimer();
   }, []);
 
   // History of taking table rows (bulls) — shown when alert / Hits is opened
@@ -161,6 +184,9 @@ export function GameBoard({
   );
   const logItems = collectLog.length > 0 ? collectLog : activity;
 
+  // Footer under the alert: who locked / still placing (not mixed into the “why” text)
+  const lockFooter = !game.ended ? lockStatusLine(game) : null;
+
   const statusPill = statusAlert
     ? {
         text: statusAlert.text,
@@ -168,7 +194,11 @@ export function GameBoard({
         tone: statusAlert.tone ?? "hot",
       }
     : !game.ended
-      ? { text: status.headline, detail: status.detail || undefined, tone: status.tone }
+      ? {
+          text: status.headline,
+          detail: status.detail || undefined,
+          tone: status.tone,
+        }
       : null;
 
   return (
@@ -239,7 +269,7 @@ export function GameBoard({
             } ${
               statusPill.tone === "hot" ? "status-alert--hot" : ""
             } ${logOpen ? "ring-1 ring-amber-300/50" : "hover:brightness-110"}`}
-            title="Tap for table collect history"
+            title="Tap to open full Hits history"
           >
             <span className="status-alert-text">
               <span className="status-alert-title">{statusPill.text}</span>
@@ -247,9 +277,9 @@ export function GameBoard({
                 <span className="status-alert-detail">{statusPill.detail}</span>
               ) : null}
             </span>
-            <span className="mt-0.5 block text-center text-[0.65em] font-normal opacity-40">
-              ▾ Hits
-            </span>
+            {lockFooter ? (
+              <span className="status-alert-footer">{lockFooter}</span>
+            ) : null}
           </button>
         ) : null}
       </div>
