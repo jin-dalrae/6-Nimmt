@@ -78,6 +78,12 @@ export function lockStatusLine(game: PublicGameState): string | null {
     return `${ready}/${total} locked`;
   }
 
+  if (game.phase === Phase.BetweenDeals) {
+    return game.betweenDealsPaused
+      ? "Break paused · scores hold"
+      : "Break before next deal";
+  }
+
   if (game.phase === Phase.PlaceCard) {
     const left = game.players.filter((p) => p.faceDownCard).length;
     if (left <= 0) return null;
@@ -145,6 +151,18 @@ export function phaseStatus(game: PublicGameState): {
         tone: "warn",
       };
     }
+  }
+
+  if (game.phase === Phase.BetweenDeals) {
+    return {
+      headline: game.betweenDealsPaused
+        ? "Deal complete — paused"
+        : "Deal complete — next hand soon",
+      detail: game.betweenDealsPaused
+        ? "Press Resume or Continue when ready."
+        : "Standings shown for a few seconds. Pause to look longer.",
+      tone: "good",
+    };
   }
 
   if (game.phase === Phase.PlaceCard) {

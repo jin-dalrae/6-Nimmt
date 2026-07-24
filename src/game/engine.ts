@@ -30,6 +30,8 @@ export function availableMoves(G: GameState, player: Player): AvailableMoves {
   switch (G.phase) {
     case Phase.ChooseCard:
       return { [MoveName.ChooseCard]: [...player.hand] };
+    case Phase.BetweenDeals:
+      return {};
     case Phase.PlaceCard:
     default: {
       const lastCards = G.rows.map((row) => row[row.length - 1]);
@@ -213,6 +215,30 @@ function finalizeEnded(G: GameState): void {
   }
 }
 
+/** Hands empty after a deal, but game continues — show scores before redeal. */
+function enterBetweenDeals(G: GameState): void {
+  G.phase = Phase.BetweenDeals;
+  for (const player of G.players) {
+    player.availableMoves = null;
+    player.faceDownCard = null;
+  }
+}
+
+/** Call after the between-deals pause to deal the next hand. */
+export function advanceAfterBetweenDeals(G: GameState): GameState {
+  assert(G.phase === Phase.BetweenDeals, "Not between deals");
+  if (G.players.some((pl) => pl.points >= G.options.points)) {
+    finalizeEnded(G);
+    return G;
+  }
+  dealNewRound(G);
+  return G;
+}
+
+export function isBetweenDeals(G: GameState): boolean {
+  return G.phase === Phase.BetweenDeals;
+}
+
 function switchToNextPlayer(G: GameState): GameState {
   // Official 6 Nimmt: once someone reaches the threshold, finish the *current deal*
   // (all cards from hands), then stop — do not deal another hand.
@@ -228,7 +254,8 @@ function switchToNextPlayer(G: GameState): GameState {
         finalizeEnded(G);
         return G;
       }
-      dealNewRound(G);
+      // Pause on standings before the next deal (server runs a short timer)
+      enterBetweenDeals(G);
       return G;
     }
 
@@ -318,11 +345,22 @@ export function loserIndexes(G: GameState): number[] {
     .filter((i) => i >= 0);
 }
 
-export function toPublicState(G: GameState, yourIndex: number): PublicGameState {
+export function toPublicState(
+  G: GameState,
+  yourIndex: number,
+  extras?: {
+    betweenDealsEndsAt?: number | null;
+    betweenDealsPaused?: boolean;
+  },
+): PublicGameState {
   const isEnded = ended(G);
   const isSpectator = yourIndex < 0;
   // Official: after everyone chooses, all cards flip at once, then place low→high.
-  const revealCards = G.phase === Phase.PlaceCard || isEnded;
+  // Between deals also shows last-played state for the standings break.
+  const revealCards =
+    G.phase === Phase.PlaceCard ||
+    G.phase === Phase.BetweenDeals ||
+    isEnded;
 
   return {
     rows: G.rows.map((row) => row.map((c) => ({ ...c }))),
@@ -336,6 +374,14 @@ export function toPublicState(G: GameState, yourIndex: number): PublicGameState 
     thresholdReached: thresholdReached(G),
     winnerIndexes: winnerIndexes(G),
     loserIndexes: loserIndexes(G),
+    betweenDealsEndsAt:
+      G.phase === Phase.BetweenDeals
+        ? (extras?.betweenDealsEndsAt ?? null)
+        : null,
+    betweenDealsPaused:
+      G.phase === Phase.BetweenDeals
+        ? Boolean(extras?.betweenDealsPaused)
+        : false,
     players: G.players.map((pl, i) => {
       const isYou = !isSpectator && i === yourIndex;
       return {

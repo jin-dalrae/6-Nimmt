@@ -13,9 +13,11 @@ import {
   placeRowForBot,
 } from "./game/ai";
 import {
+  advanceAfterBetweenDeals,
   autoPlaceIfPossible,
   cloneGame,
   ended,
+  isBetweenDeals,
   loserIndexes,
   move,
   setup,
@@ -39,6 +41,9 @@ import {
   type StatsEventName,
 } from "./game/stats";
 
+// Online Mr. Jack (2-player) — separate PartyServer DO
+export { MrJackRoom } from "./mrjack/room";
+
 export type RoomPresence = {
   roomId: string;
   status: "lobby" | "playing" | "ended";
@@ -49,6 +54,7 @@ export type RoomPresence = {
 
 type Env = {
   GameRoom: DurableObjectNamespace<GameRoom>;
+  MrJackRoom: DurableObjectNamespace;
   ASSETS?: Fetcher;
   GEMINI_API_KEY?: string;
   /** Analytics D1 — optional so local/dev without binding still runs */
@@ -99,10 +105,17 @@ type RoomData = {
   currentGameId: string | null;
   /** Wall-clock when currentGameId started */
   gameStartedAt: number | null;
+  /** Between-deals break: when the next deal auto-starts */
+  betweenDealsEndsAt: number | null;
+  betweenDealsPaused: boolean;
+  /** Remaining ms when paused (so resume continues the countdown) */
+  betweenDealsRemainingMs: number | null;
 };
 
 /** Keep in-progress games alive after a disconnect (phones idle, WS blips). */
 const ABANDON_GRACE_MS = 10 * 60 * 1000;
+/** Standings pause after each deal before the next hand */
+const BETWEEN_DEALS_MS = 3000;
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -127,6 +140,9 @@ export class GameRoom extends Server<Env> {
     abandonedAt: null,
     currentGameId: null,
     gameStartedAt: null,
+    betweenDealsEndsAt: null,
+    betweenDealsPaused: false,
+    betweenDealsRemainingMs: null,
   };
 
   private botsBusy = false;
@@ -148,6 +164,15 @@ export class GameRoom extends Server<Env> {
           typeof saved.currentGameId === "string" ? saved.currentGameId : null,
         gameStartedAt:
           typeof saved.gameStartedAt === "number" ? saved.gameStartedAt : null,
+        betweenDealsEndsAt:
+          typeof saved.betweenDealsEndsAt === "number"
+            ? saved.betweenDealsEndsAt
+            : null,
+        betweenDealsPaused: Boolean(saved.betweenDealsPaused),
+        betweenDealsRemainingMs:
+          typeof saved.betweenDealsRemainingMs === "number"
+            ? saved.betweenDealsRemainingMs
+            : null,
         players: saved.players.map((p) => ({
           ...p,
           isBot: "isBot" in p ? Boolean((p as RoomPlayer).isBot) : false,
@@ -239,8 +264,32 @@ export class GameRoom extends Server<Env> {
     }
   }
 
-  /** Alarm: wipe games only after the reconnect grace period. */
+  /** Alarm: between-deals timer and/or abandon grace. */
   async onAlarm() {
+    // Prefer finishing a deal break if one is due
+    if (
+      this.room.game &&
+      isBetweenDeals(this.room.game) &&
+      !this.room.betweenDealsPaused &&
+      this.room.betweenDealsEndsAt != null &&
+      Date.now() >= this.room.betweenDealsEndsAt - 50
+    ) {
+      await this.finishBetweenDeals();
+      return;
+    }
+
+    // Reschedule between-deals if still waiting
+    if (
+      this.room.game &&
+      isBetweenDeals(this.room.game) &&
+      !this.room.betweenDealsPaused &&
+      this.room.betweenDealsEndsAt != null &&
+      this.room.betweenDealsEndsAt > Date.now()
+    ) {
+      await this.ctx.storage.setAlarm(this.room.betweenDealsEndsAt);
+      return;
+    }
+
     const wiped = await this.resetAbandonedGame("alarm");
     if (wiped) {
       this.broadcastRoom();
@@ -248,8 +297,63 @@ export class GameRoom extends Server<Env> {
   }
 
   private async scheduleAbandonCheck() {
-    // Wake after grace; onAlarm re-checks before wiping
+    // Don't clobber an imminent between-deals alarm
+    if (
+      this.room.game &&
+      isBetweenDeals(this.room.game) &&
+      this.room.betweenDealsEndsAt != null &&
+      !this.room.betweenDealsPaused
+    ) {
+      const next = Math.min(
+        this.room.betweenDealsEndsAt,
+        Date.now() + ABANDON_GRACE_MS,
+      );
+      await this.ctx.storage.setAlarm(next);
+      return;
+    }
     await this.ctx.storage.setAlarm(Date.now() + ABANDON_GRACE_MS);
+  }
+
+  private clearBetweenDealsTimers() {
+    this.room.betweenDealsEndsAt = null;
+    this.room.betweenDealsPaused = false;
+    this.room.betweenDealsRemainingMs = null;
+  }
+
+  private async beginBetweenDealsBreak() {
+    this.room.betweenDealsPaused = false;
+    this.room.betweenDealsRemainingMs = null;
+    this.room.betweenDealsEndsAt = Date.now() + BETWEEN_DEALS_MS;
+    await this.persist();
+    this.pushGameState();
+    try {
+      await this.ctx.storage.setAlarm(this.room.betweenDealsEndsAt);
+    } catch {
+      // fall through — client can still press Continue
+    }
+  }
+
+  private async finishBetweenDeals() {
+    if (!this.room.game || !isBetweenDeals(this.room.game)) return;
+    this.clearBetweenDealsTimers();
+    let next = advanceAfterBetweenDeals(cloneGame(this.room.game));
+    this.room.game = next;
+    if (ended(next)) {
+      this.room.status = "ended";
+      await this.recordGameFinished(next, "ended");
+      await this.persist();
+      this.pushGameState();
+      this.broadcastRoom();
+      this.broadcastJson({ type: "toast", message: "Game over!" });
+      return;
+    }
+    await this.persist();
+    this.pushGameState();
+    this.broadcastJson({
+      type: "toast",
+      message: `Deal ${next.round} — new cards`,
+    });
+    await this.runBots();
   }
 
   private async clearAbandonTracking() {
@@ -428,6 +532,7 @@ export class GameRoom extends Server<Env> {
     this.room.abandonedAt = null;
     this.room.currentGameId = null;
     this.room.gameStartedAt = null;
+    this.clearBetweenDealsTimers();
     // Drop ghost humans; keep bots for a quick rematch if desired
     this.room.players = this.room.players.filter((p) => p.isBot);
     this.room.hostId =
@@ -513,7 +618,10 @@ export class GameRoom extends Server<Env> {
       const idx = isSpectator ? -1 : this.seatIndex(st.playerId);
       if (!isSpectator && idx < 0) continue;
 
-      const publicState = toPublicState(this.room.game, idx);
+      const publicState = toPublicState(this.room.game, idx, {
+        betweenDealsEndsAt: this.room.betweenDealsEndsAt,
+        betweenDealsPaused: this.room.betweenDealsPaused,
+      });
       publicState.players.forEach((p, i) => {
         p.isBot = this.isBotSeat(i);
         if (p.isBot) p.aiStyle = this.botStyleAtSeat(i);
@@ -539,9 +647,14 @@ export class GameRoom extends Server<Env> {
     await this.persist();
     this.pushGameState();
     if (this.room.status === "ended") {
+      this.clearBetweenDealsTimers();
       await this.recordGameFinished(next, "ended");
       this.broadcastRoom();
       this.broadcastJson({ type: "toast", message: "Game over!" });
+      return;
+    }
+    if (isBetweenDeals(next)) {
+      await this.beginBetweenDealsBreak();
       return;
     }
     await this.runBots();
@@ -568,6 +681,7 @@ export class GameRoom extends Server<Env> {
       while (this.room.game && this.room.status === "playing" && guard++ < 40) {
         let G = this.room.game;
         if (ended(G)) break;
+        if (isBetweenDeals(G)) break;
 
         if (G.phase === Phase.ChooseCard) {
           const botIndexes = G.players
@@ -622,11 +736,17 @@ export class GameRoom extends Server<Env> {
           this.room.game = next;
           if (ended(next)) {
             this.room.status = "ended";
+            this.clearBetweenDealsTimers();
             await this.recordGameFinished(next, "ended");
             await this.persist();
             this.pushGameState();
             this.broadcastRoom();
             this.broadcastJson({ type: "toast", message: "Game over!" });
+            return;
+          }
+          if (isBetweenDeals(next)) {
+            await this.persist();
+            await this.beginBetweenDealsBreak();
             return;
           }
           await this.persist();
@@ -685,11 +805,17 @@ export class GameRoom extends Server<Env> {
         this.room.game = next;
         if (ended(next)) {
           this.room.status = "ended";
+          this.clearBetweenDealsTimers();
           await this.recordGameFinished(next, "ended");
           await this.persist();
           this.pushGameState();
           this.broadcastRoom();
           this.broadcastJson({ type: "toast", message: "Game over!" });
+          return;
+        }
+        if (isBetweenDeals(next)) {
+          await this.persist();
+          await this.beginBetweenDealsBreak();
           return;
         }
         await this.persist();
@@ -775,6 +901,15 @@ export class GameRoom extends Server<Env> {
           break;
         case "playAgain":
           await this.handlePlayAgain(connection, msg.tightDeck);
+          break;
+        case "pauseBetweenDeals":
+          await this.handlePauseBetweenDeals(connection);
+          break;
+        case "resumeBetweenDeals":
+          await this.handleResumeBetweenDeals(connection);
+          break;
+        case "continueBetweenDeals":
+          await this.handleContinueBetweenDeals(connection);
           break;
         case "leave":
           await this.handleLeave(connection);
@@ -1455,6 +1590,7 @@ export class GameRoom extends Server<Env> {
     this.room.seats = [];
     this.room.currentGameId = null;
     this.room.gameStartedAt = null;
+    this.clearBetweenDealsTimers();
 
     // Keep bots + connected seated humans
     let nextPlayers = this.room.players.filter(
@@ -1505,6 +1641,71 @@ export class GameRoom extends Server<Env> {
     await this.persist();
     this.broadcastRoom();
     return promoted.length;
+  }
+
+  private async handlePauseBetweenDeals(connection: Connection) {
+    const playerId = (connection.state as ConnState | undefined)?.playerId;
+    if (!playerId || !this.room.game || !isBetweenDeals(this.room.game)) {
+      this.send(connection, { type: "error", message: "Nothing to pause" });
+      return;
+    }
+    if (this.room.betweenDealsPaused) return;
+
+    const remaining = Math.max(
+      0,
+      (this.room.betweenDealsEndsAt ?? Date.now()) - Date.now(),
+    );
+    this.room.betweenDealsPaused = true;
+    this.room.betweenDealsRemainingMs = remaining;
+    this.room.betweenDealsEndsAt = null;
+    await this.persist();
+    this.pushGameState();
+    const who =
+      this.room.players.find((p) => p.id === playerId)?.name ??
+      this.room.spectators.find((s) => s.id === playerId)?.name ??
+      "Someone";
+    this.broadcastJson({
+      type: "toast",
+      message: `${who} paused the break`,
+    });
+  }
+
+  private async handleResumeBetweenDeals(connection: Connection) {
+    const playerId = (connection.state as ConnState | undefined)?.playerId;
+    if (!playerId || !this.room.game || !isBetweenDeals(this.room.game)) {
+      this.send(connection, { type: "error", message: "Nothing to resume" });
+      return;
+    }
+    if (!this.room.betweenDealsPaused) return;
+
+    const remaining = this.room.betweenDealsRemainingMs ?? BETWEEN_DEALS_MS;
+    this.room.betweenDealsPaused = false;
+    this.room.betweenDealsRemainingMs = null;
+    this.room.betweenDealsEndsAt = Date.now() + Math.max(500, remaining);
+    await this.persist();
+    this.pushGameState();
+    try {
+      await this.ctx.storage.setAlarm(this.room.betweenDealsEndsAt);
+    } catch {
+      // ignore
+    }
+    const who =
+      this.room.players.find((p) => p.id === playerId)?.name ??
+      this.room.spectators.find((s) => s.id === playerId)?.name ??
+      "Someone";
+    this.broadcastJson({
+      type: "toast",
+      message: `${who} resumed — next deal soon`,
+    });
+  }
+
+  private async handleContinueBetweenDeals(connection: Connection) {
+    const playerId = (connection.state as ConnState | undefined)?.playerId;
+    if (!playerId || !this.room.game || !isBetweenDeals(this.room.game)) {
+      this.send(connection, { type: "error", message: "No deal break to skip" });
+      return;
+    }
+    await this.finishBetweenDeals();
   }
 
   private async handleRestart(connection: Connection) {

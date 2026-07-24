@@ -32,6 +32,8 @@ export interface Player {
 export enum Phase {
   ChooseCard = "choose",
   PlaceCard = "place",
+  /** Hands empty, scores visible — brief pause before next deal */
+  BetweenDeals = "between",
 }
 
 export interface GameState {
@@ -92,4 +94,8 @@ export interface PublicGameState {
   winnerIndexes: number[];
   /** Highest score(s) when game has ended */
   loserIndexes: number[];
+  /** Between deals: wall-clock ms when next deal auto-starts (null if paused / N/A) */
+  betweenDealsEndsAt?: number | null;
+  /** Between deals: countdown paused by a player */
+  betweenDealsPaused?: boolean;
 }

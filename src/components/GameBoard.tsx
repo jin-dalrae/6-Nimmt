@@ -27,6 +27,9 @@ type Props = {
   onRestart: () => void;
   /** Host: lobby reset then start a new deal immediately */
   onPlayAgain: () => void;
+  onPauseBetweenDeals: () => void;
+  onResumeBetweenDeals: () => void;
+  onContinueBetweenDeals: () => void;
 };
 
 const toneClass: Record<NonNullable<ActivityItem["tone"]>, string> = {
@@ -53,6 +56,9 @@ export function GameBoard({
   onSwapCard,
   onRestart,
   onPlayAgain,
+  onPauseBetweenDeals,
+  onResumeBetweenDeals,
+  onContinueBetweenDeals,
 }: Props) {
   const you = isSpectator || game.yourIndex < 0 ? undefined : game.players[game.yourIndex];
   const placeMoves = you?.availableMoves?.[MoveName.PlaceCard] ?? [];
@@ -60,6 +66,7 @@ export function GameBoard({
     !isSpectator &&
     placeMoves.length > 1 &&
     placeMoves.every((m) => m.replace);
+  const betweenDeals = game.phase === Phase.BetweenDeals && !game.ended;
   const canChoose =
     !isSpectator &&
     game.phase === Phase.ChooseCard &&
@@ -95,6 +102,30 @@ export function GameBoard({
   const alertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevHasChosen = useRef(false);
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
+  const [betweenCountdown, setBetweenCountdown] = useState<number | null>(null);
+
+  // Live countdown during the between-deals break
+  useEffect(() => {
+    if (!betweenDeals) {
+      setBetweenCountdown(null);
+      return;
+    }
+    if (game.betweenDealsPaused) {
+      setBetweenCountdown(null);
+      return;
+    }
+    const endsAt = game.betweenDealsEndsAt;
+    if (endsAt == null) {
+      setBetweenCountdown(null);
+      return;
+    }
+    const tick = () => {
+      setBetweenCountdown(Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)));
+    };
+    tick();
+    const id = window.setInterval(tick, 200);
+    return () => window.clearInterval(id);
+  }, [betweenDeals, game.betweenDealsPaused, game.betweenDealsEndsAt]);
 
   const clearAlertTimer = () => {
     if (alertTimer.current) {
@@ -216,7 +247,7 @@ export function GameBoard({
   return (
     <div
       className={`play-shell mx-auto flex w-full max-w-7xl flex-col gap-2 sm:gap-3 ${
-        !game.ended && !isSpectator ? "play-shell--with-hand" : ""
+        !game.ended && !isSpectator && !betweenDeals ? "play-shell--with-hand" : ""
       } ${mustPickRow ? "play-shell--pick-row" : ""}`}
     >
       {/* Top: all scores visible (wrap, no horizontal scroll) · turn · compact status */}
@@ -566,7 +597,7 @@ export function GameBoard({
             </p>
           )}
         </div>
-      ) : isHost ? (
+      ) : isHost && !betweenDeals ? (
         /* Mid-game: host can end early from the board (header Lobby is primary) */
         <div className="flex justify-end">
           <button
@@ -582,6 +613,86 @@ export function GameBoard({
           >
             Back to lobby
           </button>
+        </div>
+      ) : null}
+
+      {/* Between deals: standings + 3s countdown / pause */}
+      {betweenDeals ? (
+        <div className="felt-panel border border-sky-400/30 bg-sky-950/35 p-4 sm:p-5">
+          <h2 className="text-center text-lg font-bold text-sky-100 sm:text-xl">
+            Deal {game.round} complete
+          </h2>
+          <p className="mt-1 text-center text-sm text-emerald-100/75">
+            {game.thresholdReached
+              ? `Someone is at ${game.pointsToEnd}+ — if this was the last deal, game ends after scores.`
+              : "Scores so far · next hand coming up"}
+          </p>
+
+          <ul className="mx-auto mt-3 max-w-md space-y-1.5">
+            {[...game.players]
+              .map((p, i) => ({ p, i }))
+              .sort((a, b) => a.p.points - b.p.points)
+              .map(({ p }, rank) => (
+                <li
+                  key={rank}
+                  className={`flex items-center justify-between rounded-lg px-3 py-1.5 text-sm ${
+                    p.isYou
+                      ? "bg-amber-400/15 ring-1 ring-amber-300/40"
+                      : "bg-black/25"
+                  }`}
+                >
+                  <span className="font-medium">
+                    <span className="mr-2 tabular-nums text-emerald-100/45">
+                      #{rank + 1}
+                    </span>
+                    {p.isBot ? "🤖 " : ""}
+                    {p.name}
+                    {p.isYou ? " (you)" : ""}
+                  </span>
+                  <span className="tabular-nums text-amber-200">{p.points} 🐂</span>
+                </li>
+              ))}
+          </ul>
+
+          <div className="mt-4 flex flex-col items-center gap-2">
+            <p className="text-center text-sm font-semibold text-sky-100">
+              {game.betweenDealsPaused
+                ? "Paused — take your time"
+                : betweenCountdown != null
+                  ? `Next deal in ${betweenCountdown}s…`
+                  : "Next deal soon…"}
+            </p>
+            {!isSpectator ? (
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {game.betweenDealsPaused ? (
+                  <button
+                    type="button"
+                    onClick={onResumeBetweenDeals}
+                    className="rounded-xl bg-sky-400 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-sky-300"
+                  >
+                    Resume
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onPauseBetweenDeals}
+                    className="rounded-xl border border-sky-300/50 bg-sky-950/50 px-4 py-2 text-sm font-medium text-sky-50 hover:bg-sky-900/50"
+                  >
+                    Pause
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onContinueBetweenDeals}
+                  className="rounded-xl bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-amber-300"
+                >
+                  Continue now
+                </button>
+              </div>
+            ) : (
+              <p className="text-xs text-emerald-100/55">Watching the break…</p>
+            )}
+          </div>
         </div>
       ) : null}
 
@@ -717,8 +828,8 @@ export function GameBoard({
             </div>
           )}
 
-          {/* Hand — fixed dock on mobile; keep slim so table rows stay tappable */}
-          {!game.ended && !isSpectator ? (
+          {/* Hand — fixed dock on mobile; hide during between-deals break */}
+          {!game.ended && !isSpectator && !betweenDeals ? (
             <div className={`hand-dock ${mustPickRow ? "hand-dock--pick-row" : ""}`}>
               <div className="hand-dock-inner">
                 <div className="felt-panel p-2 sm:p-2.5 lg:p-3 lg:shadow-none">

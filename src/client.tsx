@@ -638,6 +638,9 @@ function App() {
           onSwapCard={(cardNumber) => send({ type: "swapCard", cardNumber })}
           onRestart={() => send({ type: "restart" })}
           onPlayAgain={() => send({ type: "playAgain", tightDeck })}
+          onPauseBetweenDeals={() => send({ type: "pauseBetweenDeals" })}
+          onResumeBetweenDeals={() => send({ type: "resumeBetweenDeals" })}
+          onContinueBetweenDeals={() => send({ type: "continueBetweenDeals" })}
         />
       ) : null}
 

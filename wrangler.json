@@ -13,6 +13,10 @@
       {
         "name": "GameRoom",
         "class_name": "GameRoom"
+      },
+      {
+        "name": "MrJackRoom",
+        "class_name": "MrJackRoom"
       }
     ]
   },
@@ -20,6 +24,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["GameRoom"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["MrJackRoom"]
     }
   ],
   "d1_databases": [

@@ -21,6 +21,10 @@ export type ClientMessage =
   | { type: "restart" }
   /** Host: after game over (or mid-game), lobby reset then start a new deal immediately */
   | { type: "playAgain"; tightDeck?: boolean }
+  /** Between deals: pause / resume / skip the 3s standings break */
+  | { type: "pauseBetweenDeals" }
+  | { type: "resumeBetweenDeals" }
+  | { type: "continueBetweenDeals" }
   | { type: "leave" };
 
 export type LobbyPlayer = {
