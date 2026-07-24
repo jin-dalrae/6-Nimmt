@@ -1832,7 +1832,7 @@ export default {
       return new Response(null, {
         headers: {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type",
         },
       });
@@ -1871,6 +1871,61 @@ export default {
           "Access-Control-Allow-Origin": "*",
         },
       });
+    }
+
+    // Mr. Jack local AI: status + Gemini-backed turns
+    if (request.method === "GET" && url.pathname === "/api/mrjack/status") {
+      return Response.json(
+        { hasAiKey: Boolean(env.GEMINI_API_KEY?.trim()) },
+        {
+          headers: {
+            "Cache-Control": "no-store",
+            "Access-Control-Allow-Origin": "*",
+          },
+        },
+      );
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/mrjack/ai") {
+      try {
+        const body = (await request.json()) as { game?: unknown };
+        const game = body?.game as import("./mrjack/types").GameState | undefined;
+        if (!game || typeof game !== "object" || !game.phase) {
+          return Response.json(
+            { error: "Missing game state" },
+            {
+              status: 400,
+              headers: { "Access-Control-Allow-Origin": "*" },
+            },
+          );
+        }
+        const { runAiUntilHumanGemini } = await import("./mrjack/gemini");
+        const next = await runAiUntilHumanGemini(
+          game,
+          env.GEMINI_API_KEY?.trim() || undefined,
+        );
+        return Response.json(
+          {
+            game: next,
+            engine: env.GEMINI_API_KEY?.trim() ? "gemini+heuristic" : "heuristic",
+          },
+          {
+            headers: {
+              "Cache-Control": "no-store",
+              "Access-Control-Allow-Origin": "*",
+            },
+          },
+        );
+      } catch (e) {
+        console.warn("mrjack ai route", e);
+        return Response.json(
+          { error: "AI failed" },
+          {
+            status: 500,
+            headers: { "Access-Control-Allow-Origin": "*" },
+          },
+        );
+      }
     }
 
     const party = await routePartykitRequest(request, env);

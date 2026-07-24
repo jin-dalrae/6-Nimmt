@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePartySocket } from "partysocket/react";
 import { ALL_CHARS, CHARACTERS } from "./characters";
 import { pixelPos } from "./board";
@@ -14,6 +14,7 @@ import {
   usePower,
 } from "./engine";
 import { runAiUntilHuman } from "./ai";
+// Gemini opponent runs on the Worker via POST /api/mrjack/ai (key never in browser)
 import type {
   MrJackClientMessage,
   MrJackLobbyPlayer,
@@ -381,6 +382,40 @@ export function MrJackApp() {
   const [role, setRole] = useState<Role>("detective");
   const [vsAi, setVsAi] = useState(true);
   const [localG, setLocalG] = useState<GameState | null>(null);
+  const [hasGemini, setHasGemini] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiEngine, setAiEngine] = useState<string | null>(null);
+  const aiBusyRef = useRef(false);
+
+  useEffect(() => {
+    fetch("/api/mrjack/status")
+      .then((r) => r.json() as Promise<{ hasAiKey?: boolean }>)
+      .then((j) => setHasGemini(Boolean(j.hasAiKey)))
+      .catch(() => setHasGemini(false));
+  }, []);
+
+  /** Advance AI via Worker (Gemini when key set) with local heuristic fallback. */
+  const runOpponentAsync = useCallback(async (g: GameState): Promise<GameState> => {
+    if (!g.vsAi || g.phase === "ended" || isHumanTurn(g)) return g;
+    try {
+      const res = await fetch("/api/mrjack/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ game: g }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { game?: GameState; engine?: string };
+        if (data.game?.phase) {
+          setAiEngine(data.engine ?? "gemini");
+          return data.game;
+        }
+      }
+    } catch {
+      // network / worker — fall through
+    }
+    setAiEngine("heuristic");
+    return runAiUntilHuman(g);
+  }, []);
 
   // —— Online ——
   const [name, setName] = useState(
@@ -492,29 +527,61 @@ export function MrJackApp() {
     }
   }, [connected]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const applyLocal = useCallback((fn: (g: GameState) => GameState) => {
-    setLocalG((prev) => {
-      if (!prev) return prev;
-      let next = fn(prev);
-      if (next.vsAi) next = runAiUntilHuman(next);
-      return next;
-    });
-  }, []);
+  const applyLocal = useCallback(
+    (fn: (g: GameState) => GameState) => {
+      setLocalG((prev) => {
+        if (!prev) return prev;
+        const next = fn(prev);
+        // AI continues in effect after state updates (async Gemini)
+        return next;
+      });
+    },
+    [],
+  );
 
+  // When it's the AI's turn, call the Worker so Gemini can play
   useEffect(() => {
     if (!localG || !localG.vsAi || localG.phase === "ended") return;
     if (isHumanTurn(localG)) return;
-    const t = window.setTimeout(() => {
-      setLocalG((prev) => (prev ? runAiUntilHuman(prev) : prev));
-    }, 450);
-    return () => clearTimeout(t);
-  }, [localG]);
+    if (aiBusyRef.current) return;
 
-  function startLocal() {
+    let cancelled = false;
+    aiBusyRef.current = true;
+    setAiBusy(true);
+    const snapshot = localG;
+    const t = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const next = await runOpponentAsync(snapshot);
+          if (!cancelled) setLocalG(next);
+        } finally {
+          aiBusyRef.current = false;
+          if (!cancelled) setAiBusy(false);
+        }
+      })();
+    }, 450);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+      // Allow a re-run if this effect is superseded before the fetch finishes
+      aiBusyRef.current = false;
+    };
+  }, [localG, runOpponentAsync]);
+
+  async function startLocal() {
     let g = createGame(role, vsAi);
-    if (vsAi) g = runAiUntilHuman(g);
     setLocalG(g);
     setMode("local");
+    setAiEngine(null);
+    if (vsAi && !isHumanTurn(g)) {
+      setAiBusy(true);
+      try {
+        g = await runOpponentAsync(g);
+        setLocalG(g);
+      } finally {
+        setAiBusy(false);
+      }
+    }
   }
 
   function enterOnlineRoom(code?: string) {
@@ -669,11 +736,16 @@ export function MrJackApp() {
                 onChange={(e) => setVsAi(e.target.checked)}
                 className="rounded"
               />
-              Play vs AI (on this device)
+              Play vs AI (Gemini when available)
             </label>
+            <p className="mt-1 text-[0.7rem] text-emerald-100/45">
+              {hasGemini
+                ? "Gemini is configured on the server — the AI will take real turns as your opponent."
+                : "No GEMINI_API_KEY on the server — AI uses local heuristics (still plays)."}
+            </p>
             <button
               type="button"
-              onClick={startLocal}
+              onClick={() => void startLocal()}
               className="mt-4 w-full rounded-xl border border-amber-400/50 bg-amber-400/15 px-4 py-3 font-semibold text-amber-50 hover:bg-amber-400/25"
             >
               Start local game
@@ -707,7 +779,19 @@ export function MrJackApp() {
               {localG.humanRole === "jack"
                 ? ` (${CHARACTERS[localG.jackId].name})`
                 : ""}{" "}
-              · {human ? "Your turn" : localG.vsAi ? "AI thinking…" : "…"}
+              ·{" "}
+              {human
+                ? "Your turn"
+                : localG.vsAi
+                  ? aiBusy
+                    ? hasGemini
+                      ? "Gemini is thinking…"
+                      : "AI thinking…"
+                    : "AI…"
+                  : "…"}
+              {aiEngine ? (
+                <span className="text-emerald-100/45"> · {aiEngine}</span>
+              ) : null}
             </p>
           </div>
           <div className="flex gap-2">
@@ -723,6 +807,7 @@ export function MrJackApp() {
               onClick={() => {
                 setMode("menu");
                 setLocalG(null);
+                setAiBusy(false);
               }}
             >
               Menu
