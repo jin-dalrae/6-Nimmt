@@ -773,6 +773,9 @@ export class GameRoom extends Server<Env> {
         case "restart":
           await this.handleRestart(connection);
           break;
+        case "playAgain":
+          await this.handlePlayAgain(connection, msg.tightDeck);
+          break;
         case "leave":
           await this.handleLeave(connection);
           break;
@@ -1273,27 +1276,11 @@ export class GameRoom extends Server<Env> {
     });
   }
 
-  private async handleStart(connection: Connection, tightDeckMsg?: boolean) {
-    const playerId = (connection.state as ConnState | undefined)?.playerId;
-    if (!playerId || playerId !== this.room.hostId) {
-      this.send(connection, { type: "error", message: "Only the host can start" });
-      return;
-    }
-    if (this.room.status !== "lobby") {
-      this.send(connection, { type: "error", message: "Game already started" });
-      return;
-    }
-    if (this.room.players.length < MIN_PLAYERS) {
-      this.send(connection, {
-        type: "error",
-        message: "Need at least 2 players (add AI bots to play solo)",
-      });
-      return;
-    }
-    if (!this.room.players.some((p) => !p.isBot)) {
-      this.send(connection, { type: "error", message: "Need at least one human" });
-      return;
-    }
+  /** Shared deal setup — room must already be lobby with enough players. */
+  private async beginGame(tightDeckMsg?: boolean): Promise<boolean> {
+    if (this.room.status !== "lobby") return false;
+    if (this.room.players.length < MIN_PLAYERS) return false;
+    if (!this.room.players.some((p) => !p.isBot)) return false;
 
     if (typeof tightDeckMsg === "boolean") {
       this.room.tightDeck = tightDeckMsg;
@@ -1349,6 +1336,32 @@ export class GameRoom extends Server<Env> {
         : `Game started (${deckNote}) — bots (${styleLabel})`,
     });
     await this.runBots();
+    return true;
+  }
+
+  private async handleStart(connection: Connection, tightDeckMsg?: boolean) {
+    const playerId = (connection.state as ConnState | undefined)?.playerId;
+    if (!playerId || playerId !== this.room.hostId) {
+      this.send(connection, { type: "error", message: "Only the host can start" });
+      return;
+    }
+    if (this.room.status !== "lobby") {
+      this.send(connection, { type: "error", message: "Game already started" });
+      return;
+    }
+    if (this.room.players.length < MIN_PLAYERS) {
+      this.send(connection, {
+        type: "error",
+        message: "Need at least 2 players (add AI bots to play solo)",
+      });
+      return;
+    }
+    if (!this.room.players.some((p) => !p.isBot)) {
+      this.send(connection, { type: "error", message: "Need at least one human" });
+      return;
+    }
+
+    await this.beginGame(tightDeckMsg);
   }
 
   private async handleChoose(connection: Connection, cardNumber: number) {
@@ -1423,13 +1436,11 @@ export class GameRoom extends Server<Env> {
     });
   }
 
-  private async handleRestart(connection: Connection) {
-    const playerId = (connection.state as ConnState | undefined)?.playerId;
-    if (!playerId || playerId !== this.room.hostId) {
-      this.send(connection, { type: "error", message: "Only the host can restart" });
-      return;
-    }
-
+  /**
+   * Clear the board and seat everyone for lobby.
+   * Returns how many watchers were promoted to the table.
+   */
+  private async returnToLobby(): Promise<number> {
     // If host resets mid-game without a finished result, mark abandoned
     if (
       this.room.game &&
@@ -1493,13 +1504,59 @@ export class GameRoom extends Server<Env> {
 
     await this.persist();
     this.broadcastRoom();
-    const n = promoted.length;
+    return promoted.length;
+  }
+
+  private async handleRestart(connection: Connection) {
+    const playerId = (connection.state as ConnState | undefined)?.playerId;
+    if (!playerId || playerId !== this.room.hostId) {
+      this.send(connection, { type: "error", message: "Only the host can restart" });
+      return;
+    }
+
+    const n = await this.returnToLobby();
     this.broadcastJson({
       type: "toast",
       message:
         n > 0
           ? `Back to lobby — ${n} watcher${n === 1 ? "" : "s"} joined the table`
           : "Back to lobby",
+    });
+  }
+
+  /** Host: return to lobby and immediately deal a new game (rematch). */
+  private async handlePlayAgain(
+    connection: Connection,
+    tightDeckMsg?: boolean,
+  ) {
+    const playerId = (connection.state as ConnState | undefined)?.playerId;
+    if (!playerId || playerId !== this.room.hostId) {
+      this.send(connection, {
+        type: "error",
+        message: "Only the host can start another game",
+      });
+      return;
+    }
+
+    const n = await this.returnToLobby();
+    const ok = await this.beginGame(tightDeckMsg);
+    if (!ok) {
+      this.send(connection, {
+        type: "error",
+        message: "Need at least 2 players (add bots) to start again",
+      });
+      this.broadcastJson({
+        type: "toast",
+        message:
+          n > 0
+            ? `Lobby ready — ${n} watcher${n === 1 ? "" : "s"} joined`
+            : "Back to lobby",
+      });
+      return;
+    }
+    this.broadcastJson({
+      type: "toast",
+      message: n > 0 ? `New game — ${n} watcher${n === 1 ? "" : "s"} joined!` : "New game!",
     });
   }
 

@@ -17,7 +17,10 @@ export type ClientMessage =
   | { type: "placeCard"; row: number; replace: boolean }
   /** When forced to take a row: put current card back and play another */
   | { type: "swapCard"; cardNumber: number }
+  /** Host: end current game / results → lobby only */
   | { type: "restart" }
+  /** Host: after game over (or mid-game), lobby reset then start a new deal immediately */
+  | { type: "playAgain"; tightDeck?: boolean }
   | { type: "leave" };
 
 export type LobbyPlayer = {

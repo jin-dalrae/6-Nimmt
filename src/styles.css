@@ -240,9 +240,45 @@ input {
 }
 
 .row-slot--target {
+  position: relative;
+  z-index: 5;
   border-color: var(--accent);
-  background: rgba(232, 184, 74, 0.12);
+  background: rgba(232, 184, 74, 0.18);
+  box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.35);
   animation: pulse-border 1.2s ease infinite;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+/* Compact tip above the rows — not a full-screen rules wall */
+.pick-row-banner {
+  border-radius: 0.5rem;
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  background: rgba(69, 26, 3, 0.55);
+  padding: 0.4rem 0.55rem;
+  line-height: 1.3;
+}
+
+.table-rows--pick {
+  position: relative;
+  z-index: 45; /* above hand-dock (40) so rows stay tappable on mobile */
+}
+
+/* Extra space so the fixed hand doesn’t cover the last rows while picking */
+@media (max-width: 1023px) {
+  .play-shell--with-hand.play-shell--pick-row {
+    padding-bottom: calc(8.5rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .hand-dock--pick-row {
+    /* Slim dock — long rules live on the table panel, not over the rows */
+    max-height: 36vh;
+    overflow: hidden;
+  }
+
+  .hand-dock--pick-row .hand-scroll {
+    max-height: 5.25rem;
+  }
 }
 
 @keyframes pulse-border {

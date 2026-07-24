@@ -637,6 +637,7 @@ function App() {
           onPlace={(row, replace) => send({ type: "placeCard", row, replace })}
           onSwapCard={(cardNumber) => send({ type: "swapCard", cardNumber })}
           onRestart={() => send({ type: "restart" })}
+          onPlayAgain={() => send({ type: "playAgain", tightDeck })}
         />
       ) : null}
 

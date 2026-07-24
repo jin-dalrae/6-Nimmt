@@ -23,7 +23,10 @@ type Props = {
   onPlace: (row: number, replace: boolean) => void;
   /** When forced to take a row: play a different hand card instead */
   onSwapCard: (cardNumber: number) => void;
+  /** Host: end game / results → lobby only */
   onRestart: () => void;
+  /** Host: lobby reset then start a new deal immediately */
+  onPlayAgain: () => void;
 };
 
 const toneClass: Record<NonNullable<ActivityItem["tone"]>, string> = {
@@ -49,6 +52,7 @@ export function GameBoard({
   onPlace,
   onSwapCard,
   onRestart,
+  onPlayAgain,
 }: Props) {
   const you = isSpectator || game.yourIndex < 0 ? undefined : game.players[game.yourIndex];
   const placeMoves = you?.availableMoves?.[MoveName.PlaceCard] ?? [];
@@ -187,25 +191,33 @@ export function GameBoard({
   // Footer under the alert: who locked / still placing (not mixed into the “why” text)
   const lockFooter = !game.ended ? lockStatusLine(game) : null;
 
-  const statusPill = statusAlert
+  // While choosing a row, keep the top pill short — long rules sat on/under the
+  // table and blocked taps. The compact banner lives with the rows instead.
+  const statusPill = mustPickRow
     ? {
-        text: statusAlert.text,
-        detail: statusAlert.detail,
-        tone: statusAlert.tone ?? "hot",
+        text: status.headline,
+        detail: status.detail || undefined,
+        tone: status.tone,
       }
-    : !game.ended
+    : statusAlert
       ? {
-          text: status.headline,
-          detail: status.detail || undefined,
-          tone: status.tone,
+          text: statusAlert.text,
+          detail: statusAlert.detail,
+          tone: statusAlert.tone ?? "hot",
         }
-      : null;
+      : !game.ended
+        ? {
+            text: status.headline,
+            detail: status.detail || undefined,
+            tone: status.tone,
+          }
+        : null;
 
   return (
     <div
       className={`play-shell mx-auto flex w-full max-w-7xl flex-col gap-2 sm:gap-3 ${
         !game.ended && !isSpectator ? "play-shell--with-hand" : ""
-      }`}
+      } ${mustPickRow ? "play-shell--pick-row" : ""}`}
     >
       {/* Top: all scores visible (wrap, no horizontal scroll) · turn · compact status */}
       <div className="felt-panel space-y-1 px-2 py-1.5 sm:px-2.5 sm:py-1.5">
@@ -284,7 +296,7 @@ export function GameBoard({
         ) : null}
       </div>
 
-      {/* Hits / Rules — next to logo in page header */}
+      {/* Hits / Rules / Lobby — next to logo in page header */}
       {headerSlot
         ? createPortal(
             <>
@@ -316,6 +328,43 @@ export function GameBoard({
               >
                 Rules
               </button>
+              {isHost && game.ended ? (
+                <button
+                  type="button"
+                  onClick={onPlayAgain}
+                  className="rounded-full bg-amber-400/90 px-2.5 py-1 text-xs font-semibold text-slate-900 ring-1 ring-amber-300/60 hover:bg-amber-300"
+                  title="Start another deal right away"
+                >
+                  Play again
+                </button>
+              ) : null}
+              {isHost ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (
+                      game.ended ||
+                      window.confirm(
+                        "End this game and return everyone to the lobby?",
+                      )
+                    ) {
+                      onRestart();
+                    }
+                  }}
+                  className={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${
+                    game.ended
+                      ? "bg-black/30 text-emerald-100/90 ring-white/20 hover:bg-white/10"
+                      : "bg-amber-400/90 text-slate-900 ring-amber-300/60 hover:bg-amber-300"
+                  }`}
+                  title={
+                    game.ended
+                      ? "Open lobby (change bots / settings)"
+                      : "Host only — stop game and return to lobby"
+                  }
+                >
+                  Lobby
+                </button>
+              ) : null}
             </>,
             headerSlot,
           )
@@ -485,53 +534,102 @@ export function GameBoard({
           </p>
 
           {isHost ? (
-            <div className="mt-4 text-center">
-              <button
-                type="button"
-                onClick={onRestart}
-                className="rounded-xl bg-amber-400 px-5 py-2.5 font-semibold text-slate-900 hover:bg-amber-300"
-              >
-                Back to lobby
-              </button>
-              {watchers.length > 0 ? (
-                <p className="mt-2 text-xs text-sky-200/80">
-                  {watchers.length} watcher{watchers.length === 1 ? "" : "s"} will join the next
-                  lobby
-                </p>
-              ) : null}
+            <div className="mt-4 flex flex-col items-center gap-2">
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={onPlayAgain}
+                  className="rounded-xl bg-amber-400 px-5 py-2.5 font-semibold text-slate-900 hover:bg-amber-300"
+                >
+                  Play again
+                </button>
+                <button
+                  type="button"
+                  onClick={onRestart}
+                  className="rounded-xl border border-white/25 bg-black/25 px-5 py-2.5 font-semibold text-emerald-50 hover:bg-white/10"
+                >
+                  Back to lobby
+                </button>
+              </div>
+              <p className="text-center text-xs text-emerald-100/55">
+                Play again deals a new hand with the same table
+                {watchers.length > 0
+                  ? ` · ${watchers.length} watcher${watchers.length === 1 ? "" : "s"} join if there’s room`
+                  : ""}
+              </p>
             </div>
           ) : (
             <p className="mt-3 text-center text-sm text-emerald-100/70">
               {isSpectator
-                ? "Waiting for host to open the lobby — you'll join the table for the next game."
-                : "Waiting for host to return to lobby…"}
+                ? "Waiting for host — you’ll join the next game if they play again or open the lobby."
+                : "Waiting for host to play again or return to lobby…"}
             </p>
           )}
+        </div>
+      ) : isHost ? (
+        /* Mid-game: host can end early from the board (header Lobby is primary) */
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => {
+              if (
+                window.confirm("End this game and return everyone to the lobby?")
+              ) {
+                onRestart();
+              }
+            }}
+            className="rounded-lg border border-amber-400/40 bg-amber-950/30 px-3 py-1.5 text-xs font-medium text-amber-100 hover:bg-amber-900/40"
+          >
+            Back to lobby
+          </button>
         </div>
       ) : null}
 
       {/* Two-column: table rows first (main focus), played + hand right */}
-      <div className="grid grid-cols-1 gap-2 sm:gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(14rem,0.9fr)] lg:items-start">
-        {/* Left: table rows — primary surface */}
-        <div className="felt-panel space-y-1.5 p-2.5 sm:space-y-2 sm:p-3">
+      <div
+        className={`grid grid-cols-1 gap-2 sm:gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(14rem,0.9fr)] lg:items-start ${
+          mustPickRow ? "pick-row-mode" : ""
+        }`}
+      >
+        {/* Left: table rows — primary surface (must stay above hand dock when picking) */}
+        <div
+          className={`felt-panel space-y-1.5 p-2.5 sm:space-y-2 sm:p-3 ${
+            mustPickRow ? "table-rows--pick" : ""
+          }`}
+        >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-emerald-100/80 sm:text-sm">
               Table rows
             </h2>
-            {mustPickRow ? (
-              <p className="text-xs font-medium text-amber-300">
-                Rule: #{yourPlayed?.number ?? "?"} &lt; every row end — pick any
-                row to take (fewest 🐂)
-                {canSwapCard ? ", or switch card" : ""}
-              </p>
-            ) : null}
           </div>
+          {mustPickRow ? (
+            <div className="pick-row-banner" role="status">
+              <p className="font-semibold text-amber-100">
+                Tap a row to take
+                {yourPlayed ? (
+                  <span className="font-normal text-amber-100/85">
+                    {" "}
+                    — #{yourPlayed.number} fits nowhere
+                  </span>
+                ) : null}
+              </p>
+              <p className="text-[0.7rem] text-amber-50/80">
+                Choose fewest 🐂
+                {canSwapCard ? " · or tap a hand card to switch" : ""}
+              </p>
+            </div>
+          ) : null}
           {game.rows.map((row, rowIndex) => {
             const isTarget = mustPickRow && placeMoves.some((m) => m.row === rowIndex);
             const placeOpt = placeMoves.find((m) => m.row === rowIndex);
             const rowPoints = row.reduce((s, c) => s + c.points, 0);
             return (
-              <div key={rowIndex} className="flex items-center gap-1 sm:gap-1.5">
+              <div
+                key={rowIndex}
+                className={`flex items-center gap-1 sm:gap-1.5 ${
+                  isTarget ? "relative z-10" : ""
+                }`}
+              >
                 <span className="w-4 shrink-0 text-center text-[0.65rem] text-emerald-200/60 sm:w-5 sm:text-xs">
                   {rowIndex + 1}
                 </span>
@@ -541,7 +639,9 @@ export function GameBoard({
                   onClick={() => {
                     if (placeOpt) onPlace(placeOpt.row, placeOpt.replace);
                   }}
-                  className={`row-slot min-w-0 flex-1 text-left ${isTarget ? "row-slot--target cursor-pointer" : ""}`}
+                  className={`row-slot min-w-0 flex-1 text-left ${
+                    isTarget ? "row-slot--target cursor-pointer" : ""
+                  }`}
                 >
                   {row.map((card) => (
                     <CardView key={card.number} card={card} size="sm" />
@@ -553,9 +653,15 @@ export function GameBoard({
                     />
                   ))}
                 </button>
-                <div className="flex w-10 shrink-0 flex-col items-end text-[0.6rem] leading-tight text-emerald-200/50 sm:w-11 sm:text-[0.65rem]">
+                <div
+                  className={`flex w-10 shrink-0 flex-col items-end text-[0.6rem] leading-tight sm:w-11 sm:text-[0.65rem] ${
+                    isTarget ? "text-amber-200/90" : "text-emerald-200/50"
+                  }`}
+                >
                   <span>{row.length}/5</span>
-                  {row.length > 0 ? <span className="tabular-nums">{rowPoints}🐂</span> : null}
+                  {row.length > 0 ? (
+                    <span className="tabular-nums">{rowPoints}🐂</span>
+                  ) : null}
                 </div>
               </div>
             );
@@ -611,26 +717,12 @@ export function GameBoard({
             </div>
           )}
 
-          {/* Hand — fixed dock on mobile (cards only, no status repeat) */}
+          {/* Hand — fixed dock on mobile; keep slim so table rows stay tappable */}
           {!game.ended && !isSpectator ? (
-            <div className="hand-dock">
+            <div className={`hand-dock ${mustPickRow ? "hand-dock--pick-row" : ""}`}>
               <div className="hand-dock-inner">
-                <div className="felt-panel p-2.5 sm:p-3 lg:shadow-none">
-                  {canSwapCard && yourPlayed ? (
-                    <div className="mb-2 rounded-lg border border-amber-400/40 bg-amber-950/40 px-2 py-1.5 text-xs text-amber-50">
-                      <p className="font-semibold text-amber-200">
-                        Official rule — lowest card
-                      </p>
-                      <p className="mt-0.5 text-amber-100/90">
-                        #{yourPlayed.number} is smaller than every row’s last card, so it
-                        can’t go on the table. You must take{" "}
-                        <strong>one whole row</strong> (choose the fewest bull heads). Your
-                        #{yourPlayed.number} becomes the new start of that row. Or tap another
-                        hand card to play that instead (house rule).
-                      </p>
-                    </div>
-                  ) : null}
-                  <h2 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-emerald-100/80 sm:text-sm">
+                <div className="felt-panel p-2 sm:p-2.5 lg:p-3 lg:shadow-none">
+                  <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-emerald-100/80 sm:mb-1.5 sm:text-sm">
                     Your hand
                     {canChoose ? (
                       <span className="font-normal normal-case tracking-normal text-amber-200/90">
@@ -640,7 +732,7 @@ export function GameBoard({
                     ) : canSwapCard ? (
                       <span className="font-normal normal-case tracking-normal text-amber-200/90">
                         {" "}
-                        — tap to switch
+                        — switch card (optional)
                       </span>
                     ) : waitingChoose ? (
                       <span className="font-normal normal-case tracking-normal text-emerald-100/50">

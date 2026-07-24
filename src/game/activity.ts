@@ -150,11 +150,10 @@ export function phaseStatus(game: PublicGameState): {
   if (game.phase === Phase.PlaceCard) {
     const placeOpts = you?.availableMoves?.[MoveName.PlaceCard] ?? [];
     if (placeOpts.length > 1 && placeOpts.every((m) => m.replace)) {
-      // Official Rule 4: card lower than every row end → choose any row to take
+      // Official Rule 4 — keep status short so the table rows stay visible/tappable
       return {
-        headline: "Too low for every row — pick a row to take",
-        detail:
-          "Rule: your card fits nowhere. Choose any row (usually fewest 🐂). Your card starts that row. Or switch to another hand card.",
+        headline: "Too low — tap a table row to take",
+        detail: "Fewest 🐂 · or switch card in your hand",
         tone: "hot",
       };
     }
