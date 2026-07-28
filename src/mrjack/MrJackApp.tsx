@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePartySocket } from "partysocket/react";
 import { ALL_CHARS, CHARACTERS } from "./characters";
-import { pixelPos } from "./board";
+import { buildMap, pixelPos } from "./board";
 import {
   accuse,
   createGame,
@@ -120,6 +120,7 @@ function BoardView({
   onAccuse: (id: CharId) => void;
 }) {
   const size = 26;
+  const defaultExits = useMemo(() => buildMap().exits, []);
   const positions = G.streets.map(parseHex);
   const xs = positions.map((h) => pixelPos(h, size).x);
   const ys = positions.map((h) => pixelPos(h, size).y);
@@ -151,43 +152,164 @@ function BoardView({
           <svg viewBox={vb} className="mx-auto h-auto w-full max-w-2xl">
             {G.buildings.map((k) => {
               const h = parseHex(k);
+              const { x, y } = pixelPos(h, size);
               return (
-                <HexPoly
-                  key={k}
-                  q={h.q}
-                  r={h.r}
-                  size={size}
-                  fill="#1e293b"
-                  stroke="#475569"
-                  dim
-                />
+                <g key={k}>
+                  <HexPoly
+                    q={h.q}
+                    r={h.r}
+                    size={size}
+                    fill="#1e293b"
+                    stroke="#475569"
+                    dim
+                  />
+                  <text
+                    x={x}
+                    y={y - 2}
+                    textAnchor="middle"
+                    fontSize={10}
+                    opacity={0.6}
+                  >
+                    🏛️
+                  </text>
+                  <text
+                    x={x}
+                    y={y + 9}
+                    textAnchor="middle"
+                    fontSize={5.5}
+                    fill="#64748b"
+                  >
+                    ({h.q},{h.r})
+                  </text>
+                </g>
               );
             })}
             {G.streets.map((k) => {
               const h = parseHex(k);
+              const { x, y } = pixelPos(h, size);
               const lit = G.litGas.includes(k);
-              const exit = G.exits.includes(k);
+              const gasSocket = G.gasSockets.includes(k);
               const man = G.manholes.includes(k);
+              const isOpenExit = G.exits.includes(k);
+              const isCordonedExit = defaultExits.includes(k) && !G.exits.includes(k);
               const legal =
                 G.legalMoves.includes(k) && human && G.phase === "move";
+              const isPowerTarget =
+                G.phase === "power" && human && (G.powerTargets as string[]).includes(k);
+
               return (
-                <HexPoly
-                  key={k}
-                  q={h.q}
-                  r={h.r}
-                  size={size}
-                  fill={
-                    legal
-                      ? "rgba(251, 191, 36, 0.55)"
-                      : lit
-                        ? "rgba(254, 243, 199, 0.35)"
-                        : exit
-                          ? "rgba(52, 211, 153, 0.2)"
-                          : "rgba(15, 23, 42, 0.55)"
-                  }
-                  stroke={legal ? "#fbbf24" : man ? "#64748b" : "#334155"}
-                  onClick={legal ? () => onMove(k as HexKey) : undefined}
-                />
+                <g key={k}>
+                  <HexPoly
+                    q={h.q}
+                    r={h.r}
+                    size={size}
+                    fill={
+                      isPowerTarget
+                        ? "rgba(56, 189, 248, 0.45)"
+                        : legal
+                          ? "rgba(251, 191, 36, 0.55)"
+                          : lit
+                            ? "rgba(254, 243, 199, 0.35)"
+                            : isOpenExit
+                              ? "rgba(52, 211, 153, 0.2)"
+                              : isCordonedExit
+                                ? "rgba(244, 63, 94, 0.25)"
+                                : "rgba(15, 23, 42, 0.55)"
+                    }
+                    stroke={
+                      isPowerTarget
+                        ? "#38bdf8"
+                        : legal
+                          ? "#fbbf24"
+                          : isCordonedExit
+                            ? "#f43f5e"
+                            : isOpenExit
+                              ? "#34d399"
+                              : man
+                                ? "#64748b"
+                                : "#334155"
+                    }
+                    onClick={
+                      isPowerTarget
+                        ? () => onPower(k)
+                        : legal
+                          ? () => onMove(k as HexKey)
+                          : undefined
+                    }
+                  />
+
+                  <text
+                    x={x}
+                    y={y + 11}
+                    textAnchor="middle"
+                    fontSize={5.5}
+                    fill="#94a3b8"
+                    opacity={0.65}
+                    pointerEvents="none"
+                  >
+                    ({h.q},{h.r})
+                  </text>
+
+                  {isOpenExit ? (
+                    <g pointerEvents="none">
+                      <text x={x} y={y - 5} textAnchor="middle" fontSize={8}>
+                        🚪
+                      </text>
+                      <text
+                        x={x}
+                        y={y + 3}
+                        textAnchor="middle"
+                        fontSize={5.5}
+                        fontWeight={700}
+                        fill="#34d399"
+                      >
+                        EXIT
+                      </text>
+                    </g>
+                  ) : isCordonedExit ? (
+                    <g pointerEvents="none">
+                      <text x={x} y={y - 5} textAnchor="middle" fontSize={8}>
+                        🚧
+                      </text>
+                      <text
+                        x={x}
+                        y={y + 3}
+                        textAnchor="middle"
+                        fontSize={5.5}
+                        fontWeight={700}
+                        fill="#f43f5e"
+                      >
+                        CORDON
+                      </text>
+                    </g>
+                  ) : null}
+
+                  {gasSocket && !isOpenExit && !isCordonedExit ? (
+                    <text
+                      x={x - 6}
+                      y={y - 3}
+                      textAnchor="middle"
+                      fontSize={8}
+                      pointerEvents="none"
+                      opacity={lit ? 1 : 0.4}
+                    >
+                      {lit ? "💡" : "🕯️"}
+                    </text>
+                  ) : null}
+
+                  {man && !isOpenExit && !isCordonedExit ? (
+                    <text
+                      x={x + 6}
+                      y={y - 3}
+                      textAnchor="middle"
+                      fontSize={7.5}
+                      pointerEvents="none"
+                      opacity={0.7}
+                    >
+                      🕳️
+                    </text>
+                  ) : null}
+                </g>
               );
             })}
             {ALL_CHARS.map((id) => {
@@ -195,14 +317,32 @@ function BoardView({
               const { x, y } = pixelPos(h, size);
               const cleared = G.cleared.includes(id);
               const selected = G.selected === id;
+              const isPowerTarget =
+                G.phase === "power" && human && (G.powerTargets as string[]).includes(id);
+
               return (
-                <g key={id}>
+                <g
+                  key={id}
+                  onClick={isPowerTarget ? () => onPower(id) : undefined}
+                  style={{ cursor: isPowerTarget ? "pointer" : "default" }}
+                >
+                  {isPowerTarget && (
+                    <circle
+                      cx={x}
+                      cy={y}
+                      r={16}
+                      fill="none"
+                      stroke="#38bdf8"
+                      strokeWidth={2.5}
+                      className="animate-pulse"
+                    />
+                  )}
                   <circle
                     cx={x}
                     cy={y}
                     r={selected ? 14 : 12}
                     fill={CHARACTERS[id].color}
-                    stroke={selected ? "#fbbf24" : "#0f172a"}
+                    stroke={selected ? "#fbbf24" : isPowerTarget ? "#38bdf8" : "#0f172a"}
                     strokeWidth={selected ? 2.5 : 1.5}
                     opacity={cleared ? 0.35 : 1}
                   />
@@ -213,6 +353,7 @@ function BoardView({
                     fontSize={8}
                     fontWeight={700}
                     fill="#0f172a"
+                    pointerEvents="none"
                   >
                     {CHARACTERS[id].name.slice(0, 2)}
                   </text>
@@ -220,8 +361,8 @@ function BoardView({
               );
             })}
           </svg>
-          <p className="mt-1 text-center text-[0.65rem] text-emerald-100/45">
-            Gold hex = legal move · Pale = lit · Green edge = exit · Dark = building
+          <p className="mt-1.5 text-center text-[0.65rem] text-emerald-100/55">
+            Gold = Move · Cyan = Target · 🚪 Exit · 🚧 Cordon · 💡 Lit Gas · 🕯️ Unlit · 🕳️ Manhole · (q,r) Coords
           </p>
         </div>
 
@@ -272,18 +413,30 @@ function BoardView({
                     Draw alibi card
                   </button>
                 ) : (
-                  (G.powerTargets as string[]).map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      className="rounded-lg border border-white/15 px-2 py-1.5 text-left text-xs hover:bg-white/5"
-                      onClick={() => onPower(t)}
-                    >
-                      {ALL_CHARS.includes(t as CharId)
-                        ? `Target ${CHARACTERS[t as CharId].name}`
-                        : `Hex ${t}`}
-                    </button>
-                  ))
+                  (G.powerTargets as string[]).map((t) => {
+                    let label = `Target Hex (${t})`;
+                    if (ALL_CHARS.includes(t as CharId)) {
+                      label = `Target ${CHARACTERS[t as CharId].name}`;
+                    } else if (G.pendingPower === "lestrade") {
+                      label = `🚧 Cordon Exit at (${t})`;
+                    } else if (G.pendingPower === "smith") {
+                      label = `💡 Light Gas Socket at (${t})`;
+                    } else if (G.pendingPower === "gull") {
+                      label = `🔄 Swap position with ${CHARACTERS[t as CharId]?.name ?? t}`;
+                    } else if (G.pendingPower === "goodley") {
+                      label = `🎺 Pull ${CHARACTERS[t as CharId]?.name ?? t} 1 step closer`;
+                    }
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        className="rounded-lg border border-sky-400/30 bg-sky-500/10 px-2 py-1.5 text-left text-xs font-medium text-sky-100 hover:bg-sky-500/20"
+                        onClick={() => onPower(t)}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })
                 )}
                 <button
                   type="button"
