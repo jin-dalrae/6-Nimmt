@@ -322,20 +322,14 @@ export function TakeANumberApp() {
               {p.faceDownCard ? "Selected" : "Waiting"}
             </div>
 
-            {/* Personal # Row */}
             <div className="mt-2 border-t border-white/10 pt-2">
-              <div className="text-[0.65rem] font-semibold text-amber-200/90">
-                # Row (Safe):
+              <div className="text-[0.65rem] font-semibold text-amber-200/90 mb-1">
+                Personal # Row (0pt Safe):
               </div>
-              <div className="mt-1 flex flex-wrap gap-1">
+              <div className="flex flex-wrap items-center gap-1">
                 {p.personalRow.length > 0 ? (
                   p.personalRow.map((c) => (
-                    <span
-                      key={c.number}
-                      className="rounded bg-black/40 px-1.5 py-0.5 text-[0.65rem] font-mono text-amber-200 border border-white/10"
-                    >
-                      {c.number}
-                    </span>
+                    <CardView key={c.number} card={c} size="sm" />
                   ))
                 ) : (
                   <span className="text-[0.65rem] text-emerald-100/40">Empty</span>
