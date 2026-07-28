@@ -1,8 +1,7 @@
 import type { Hex, HexKey } from "./types";
 import { hexKey } from "./types";
 
-/** Axial hex neighbors */
-const DIRS: Hex[] = [
+export const DIRS: Hex[] = [
   { q: 1, r: 0 },
   { q: 1, r: -1 },
   { q: 0, r: -1 },

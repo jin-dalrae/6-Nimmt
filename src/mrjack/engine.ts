@@ -1,5 +1,5 @@
 import { ALL_CHARS, CHARACTERS } from "./characters";
-import { buildMap, hexDist, neighbors } from "./board";
+import { buildMap, DIRS, hexDist, neighbors } from "./board";
 import type { CharId, GameState, Hex, HexKey, Role } from "./types";
 import { hexKey, parseHex } from "./types";
 
@@ -87,6 +87,7 @@ export function createGame(
     available,
     used: [],
     positions,
+    watsonDir: 0,
     litGas,
     gasSockets: map.gasSockets,
     manholes: map.manholes,
@@ -170,22 +171,43 @@ export function legalDestinations(G: GameState, who: CharId): HexKey[] {
   return [...result];
 }
 
-function isIlluminated(G: GameState, pos: HexKey): boolean {
-  if (G.litGas.includes(pos)) return true;
-  // Watson lantern: his hex + neighbor in direction of most adjacent empty? simplify: watson hex + all neighbors
+export function getWatsonBeamHexes(G: GameState): HexKey[] {
   const w = G.positions.watson;
-  if (pos === w) return true;
+  if (!w) return [];
   const wh = parseHex(w);
-  for (const n of neighbors(wh)) {
-    if (hexKey(n) === pos) return true;
+  const dir = DIRS[G.watsonDir ?? 0];
+  if (!dir) return [];
+
+  const beam: HexKey[] = [];
+  let curr = { q: wh.q + dir.q, r: wh.r + dir.r };
+
+  while (
+    (G.streets.includes(hexKey(curr)) || G.exits.includes(hexKey(curr))) &&
+    !G.buildings.includes(hexKey(curr))
+  ) {
+    beam.push(hexKey(curr));
+    curr = { q: curr.q + dir.q, r: curr.r + dir.r };
   }
-  // Adjacent to any other character = "seen" by witnesses
+
+  return beam;
+}
+
+function isIlluminated(G: GameState, pos: HexKey): boolean {
+  for (const g of G.litGas) {
+    if (g === pos || hexDist(parseHex(g), parseHex(pos)) === 1) return true;
+  }
+
+  if (pos !== G.positions.watson) {
+    const beam = getWatsonBeamHexes(G);
+    if (beam.includes(pos)) return true;
+  }
+
   for (const id of ALL_CHARS) {
-    if (id === "watson") continue;
     const p = G.positions[id];
     if (p === pos) continue;
     if (hexDist(parseHex(p), parseHex(pos)) === 1) return true;
   }
+
   return false;
 }
 
@@ -214,7 +236,14 @@ export function moveCharacter(G: GameState, dest: HexKey): GameState {
   next.legalMoves = [];
 
   // Powers that need a target
-  if (who === "holmes" || who === "smith" || who === "gull" || who === "goodley" || who === "lestrade") {
+  if (
+    who === "holmes" ||
+    who === "smith" ||
+    who === "gull" ||
+    who === "goodley" ||
+    who === "lestrade" ||
+    who === "watson"
+  ) {
     next.phase = "power";
     next.pendingPower = who;
     next.powerTargets = powerTargets(next, who);
@@ -236,6 +265,8 @@ function powerTargets(G: GameState, who: CharId): HexKey[] | CharId[] {
       return ALL_CHARS.filter((c) => c !== "gull");
     case "goodley":
       return ALL_CHARS.filter((c) => c !== "goodley");
+    case "watson":
+      return ["dir_0", "dir_1", "dir_2", "dir_3", "dir_4", "dir_5"];
     case "lestrade":
       return G.exits;
     default:
@@ -295,8 +326,15 @@ export function usePower(G: GameState, target: string): GameState {
       log(next, `Goodley whistled — ${CHARACTERS[other].name} stepped closer.`);
     }
   } else if (who === "lestrade") {
-    // Seal exit: remove from exits temporarily for this call only — store sealed
     log(next, `Lestrade cordoned an exit.`);
+  } else if (who === "watson") {
+    if (target.startsWith("dir_")) {
+      const dirIndex = Number(target.replace("dir_", ""));
+      if (dirIndex >= 0 && dirIndex <= 5) {
+        next.watsonDir = dirIndex;
+        log(next, `Watson oriented his lantern direction (${dirIndex}).`);
+      }
+    }
   }
 
   return finishActivation(next, who);
@@ -355,6 +393,13 @@ export function resolveCall(G: GameState): GameState {
       ? "Witnesses SAW Mr. Jack — anyone in shadow is innocent."
       : "Mr. Jack was UNSEEN — anyone in the light is innocent.",
   );
+
+  if (next.round <= 4 && next.litGas.length > 0) {
+    const ext = next.litGas.shift();
+    if (ext) {
+      log(next, `End of Round ${next.round}: Gaslight at (${ext}) went out.`);
+    }
+  }
 
   // Jack escape: end of odd rounds if unseen and on exit
   if (next.round % 2 === 1 && !seen) {

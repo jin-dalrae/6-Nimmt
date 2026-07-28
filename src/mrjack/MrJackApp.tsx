@@ -5,6 +5,7 @@ import { buildMap, pixelPos } from "./board";
 import {
   accuse,
   createGame,
+  getWatsonBeamHexes,
   isHumanTurn,
   legalDestinations,
   moveCharacter,
@@ -121,6 +122,7 @@ function BoardView({
 }) {
   const size = 26;
   const defaultExits = useMemo(() => buildMap().exits, []);
+  const watsonBeamHexes = useMemo(() => getWatsonBeamHexes(G as GameState), [G]);
   const positions = G.streets.map(parseHex);
   const xs = positions.map((h) => pixelPos(h, size).x);
   const ys = positions.map((h) => pixelPos(h, size).y);
@@ -149,6 +151,20 @@ function BoardView({
 
       <div className="grid gap-3 lg:grid-cols-[1fr_16rem]">
         <div className="felt-panel overflow-x-auto p-2 sm:p-3">
+          {G.log && G.log.length > 0 && (
+            <div className="mb-2.5 rounded-xl border border-violet-400/30 bg-violet-950/40 p-2.5 text-xs text-violet-100">
+              <div className="font-bold text-violet-300 text-[0.7rem] uppercase tracking-wider mb-1 flex items-center justify-between">
+                <span>⚡ Recent Activity & Opponent Moves</span>
+              </div>
+              <ul className="space-y-0.5 font-mono text-[0.7rem] text-violet-100/90">
+                {G.log.slice(0, 3).map((item, idx) => (
+                  <li key={idx} className="truncate">
+                    • {item}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <svg viewBox={vb} className="mx-auto h-auto w-full max-w-2xl">
             {G.buildings.map((k) => {
               const h = parseHex(k);
@@ -192,6 +208,7 @@ function BoardView({
               const man = G.manholes.includes(k);
               const isOpenExit = G.exits.includes(k);
               const isCordonedExit = defaultExits.includes(k) && !G.exits.includes(k);
+              const inWatsonBeam = watsonBeamHexes.includes(k);
               const legal =
                 G.legalMoves.includes(k) && human && G.phase === "move";
               const isPowerTarget =
@@ -208,13 +225,15 @@ function BoardView({
                         ? "rgba(56, 189, 248, 0.45)"
                         : legal
                           ? "rgba(251, 191, 36, 0.55)"
-                          : lit
-                            ? "rgba(254, 243, 199, 0.35)"
-                            : isOpenExit
-                              ? "rgba(52, 211, 153, 0.2)"
-                              : isCordonedExit
-                                ? "rgba(244, 63, 94, 0.25)"
-                                : "rgba(15, 23, 42, 0.55)"
+                          : inWatsonBeam
+                            ? "rgba(253, 224, 71, 0.45)"
+                            : lit
+                              ? "rgba(254, 243, 199, 0.35)"
+                              : isOpenExit
+                                ? "rgba(52, 211, 153, 0.2)"
+                                : isCordonedExit
+                                  ? "rgba(244, 63, 94, 0.25)"
+                                  : "rgba(15, 23, 42, 0.55)"
                     }
                     stroke={
                       isPowerTarget
@@ -312,6 +331,30 @@ function BoardView({
                 </g>
               );
             })}
+
+            {G.positions.watson && (() => {
+              const wh = parseHex(G.positions.watson);
+              const { x: wx, y: wy } = pixelPos(wh, size);
+              const dir = DIRS[G.watsonDir ?? 0];
+              if (!dir) return null;
+              const farHex = { q: wh.q + dir.q * 6, r: wh.r + dir.r * 6 };
+              const { x: fx, y: fy } = pixelPos(farHex, size);
+
+              return (
+                <line
+                  x1={wx}
+                  y1={wy}
+                  x2={fx}
+                  y2={fy}
+                  stroke="#fde047"
+                  strokeWidth={3.5}
+                  strokeDasharray="6 3"
+                  opacity={0.85}
+                  pointerEvents="none"
+                />
+              );
+            })()}
+
             {ALL_CHARS.map((id) => {
               const h = parseHex(G.positions[id]);
               const { x, y } = pixelPos(h, size);
@@ -383,23 +426,67 @@ function BoardView({
             </p>
 
             {G.phase === "selectChar" && human ? (
-              <div className="mt-2 grid grid-cols-2 gap-1.5">
-                {G.available.map((id) => (
-                  <button
-                    key={id}
-                    type="button"
-                    disabled={G.cleared.includes(id) && G.currentRole === "detective"}
-                    onClick={() => onSelect(id)}
-                    className="rounded-lg border border-white/10 px-2 py-2 text-left text-xs hover:bg-white/5 disabled:opacity-40"
-                    style={{ borderLeftColor: CHARACTERS[id].color, borderLeftWidth: 3 }}
-                  >
-                    <div className="font-semibold">{CHARACTERS[id].name}</div>
-                    <div className="text-[0.65rem] text-emerald-100/50">
-                      move {CHARACTERS[id].moveMin}–{CHARACTERS[id].moveMax}
+              <>
+                {(() => {
+                  const isOdd = G.round % 2 === 1;
+                  const slotPattern: Role[] = isOdd
+                    ? ["detective", "jack", "jack", "detective"]
+                    : ["jack", "detective", "detective", "jack"];
+                  const currentSlotIndex = Math.min(3, Math.max(0, 4 - G.available.length));
+
+                  return (
+                    <div className="mt-2 mb-3 rounded-xl border border-white/10 bg-black/30 p-2 text-xs">
+                      <div className="mb-1 flex items-center justify-between text-[0.65rem] font-semibold text-emerald-100/60">
+                        <span>Round {G.round} Draft Sequence</span>
+                        <span>Slot {currentSlotIndex + 1}/4</span>
+                      </div>
+                      <div className="grid grid-cols-4 gap-1 text-center font-bold text-[0.65rem]">
+                        {slotPattern.map((r, idx) => {
+                          const isCurrent = idx === currentSlotIndex;
+                          const isPast = idx < currentSlotIndex;
+                          return (
+                            <div
+                              key={idx}
+                              className={`rounded py-1 px-1 border transition ${
+                                isCurrent
+                                  ? "border-amber-400 bg-amber-400/20 text-amber-200"
+                                  : isPast
+                                    ? "border-white/5 bg-black/40 text-emerald-100/30 line-through"
+                                    : "border-white/10 bg-black/20 text-emerald-100/60"
+                              }`}
+                            >
+                              {r === "detective" ? "🕵️ Det" : "🎩 Jack"}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {G.available.length === 1 && (
+                        <p className="mt-1.5 text-[0.65rem] text-amber-200/90 italic">
+                          📌 Slot 4/4 (Final activation): Only 1 character remains ({CHARACTERS[G.available[0]].name}).
+                        </p>
+                      )}
                     </div>
-                  </button>
-                ))}
-              </div>
+                  );
+                })()}
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  {G.available.map((id) => (
+                    <button
+                      key={id}
+                      type="button"
+                      disabled={G.cleared.includes(id) && G.currentRole === "detective"}
+                      onClick={() => onSelect(id)}
+                      className="rounded-lg border border-white/10 px-2 py-2 text-left text-xs hover:bg-white/5 disabled:opacity-40"
+                      style={{ borderLeftColor: CHARACTERS[id].color, borderLeftWidth: 3 }}
+                    >
+                      <div className="font-semibold">{CHARACTERS[id].name}</div>
+                      <div className="text-[0.65rem] text-emerald-100/50">
+                        move {CHARACTERS[id].moveMin}–{CHARACTERS[id].moveMax}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
             ) : null}
 
             {G.phase === "power" && human ? (
@@ -423,6 +510,10 @@ function BoardView({
                       label = `💡 Light Gas Socket at (${t})`;
                     } else if (G.pendingPower === "gull") {
                       label = `🔄 Swap position with ${CHARACTERS[t as CharId]?.name ?? t}`;
+                    } else if (G.pendingPower === "watson") {
+                      const dirIdx = Number(t.replace("dir_", ""));
+                      const arrows = ["↗ Right", "↘ South-East", "↙ South-West", "↖ Left", "↖ North-West", "↗ North-East"];
+                      label = `🔦 Point Lantern: ${arrows[dirIdx] ?? t}`;
                     } else if (G.pendingPower === "goodley") {
                       label = `🎺 Pull ${CHARACTERS[t as CharId]?.name ?? t} 1 step closer`;
                     }
@@ -706,7 +797,13 @@ export function MrJackApp() {
       void (async () => {
         try {
           const next = await runOpponentAsync(snapshot);
-          if (!cancelled) setLocalG(next);
+          if (!cancelled) {
+            const newLogs = next.log.filter((line) => !snapshot.log.includes(line));
+            if (newLogs.length > 0) {
+              showToast(`⚡ Opponent Action: ${newLogs[0]}`);
+            }
+            setLocalG(next);
+          }
         } finally {
           aiBusyRef.current = false;
           if (!cancelled) setAiBusy(false);

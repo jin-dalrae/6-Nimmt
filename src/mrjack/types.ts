@@ -54,6 +54,7 @@ export type GameState = {
   /** Used this turn */
   used: CharId[];
   positions: Record<CharId, HexKey>;
+  watsonDir: number;
   /** Gaslight hexes that are currently lit */
   litGas: HexKey[];
   /** All gaslight sockets */
