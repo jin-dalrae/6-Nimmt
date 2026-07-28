@@ -422,18 +422,17 @@ function App() {
             >
               Play solo vs AI (3 bots)
             </button>
-            <a
-              href="/take-a-number"
-              className="rounded-xl border border-amber-400/50 bg-amber-500/15 px-4 py-3 font-medium text-amber-100 hover:bg-amber-500/25 text-center"
+            <button
+              type="button"
+              className="rounded-xl border border-white/20 px-4 py-3 text-emerald-100 hover:bg-white/5"
+              onClick={() => {
+                const code = randomCode();
+                setRoomInput(code);
+                enterRoom(code);
+              }}
             >
-              Play Take a Number (X nimmt!) 🔢
-            </a>
-            <a
-              href="/mrjack"
-              className="rounded-xl border border-violet-400/50 bg-violet-500/15 px-4 py-3 font-medium text-violet-100 hover:bg-violet-500/25 text-center"
-            >
-              Play Mr. Jack 🕵️
-            </a>
+              New random room
+            </button>
           </div>
 
           {recentRooms.length > 0 ? (
@@ -545,15 +544,27 @@ function App() {
         </div>
       ) : null}
 
-      {/* Single Mr. Jack entry — bottom of home only */}
       {screen === "home" ? (
         <div className="mx-auto mt-8 w-full max-w-md px-0">
-          <a
-            href="/mrjack"
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-violet-400/50 bg-violet-500/15 px-5 py-3.5 text-sm font-semibold text-violet-50 hover:bg-violet-500/25"
-          >
-            Play Mr. Jack <span aria-hidden>🕵️</span>
-          </a>
+          <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 backdrop-blur-md text-center">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-emerald-100/60 mb-3">
+              Other Games
+            </h3>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <a
+                href="/take-a-number"
+                className="flex items-center justify-center gap-2 rounded-xl border border-amber-400/50 bg-amber-500/15 px-3 py-2.5 text-xs font-semibold text-amber-100 hover:bg-amber-500/25"
+              >
+                Take a Number (X nimmt!) 🔢
+              </a>
+              <a
+                href="/mrjack"
+                className="flex items-center justify-center gap-2 rounded-xl border border-violet-400/50 bg-violet-500/15 px-3 py-2.5 text-xs font-semibold text-violet-100 hover:bg-violet-500/25"
+              >
+                Mr. Jack 🕵️
+              </a>
+            </div>
+          </div>
         </div>
       ) : null}
 
