@@ -221,32 +221,44 @@ export function TakeANumberApp() {
         </div>
       </header>
 
-      <div className="mb-4 rounded-xl border border-white/10 bg-slate-900/60 p-2 sm:p-2.5 backdrop-blur-md">
+      <div className="mb-4 rounded-2xl border border-amber-300/30 bg-slate-900/80 p-3 shadow-lg backdrop-blur-md">
+        <div className="mb-1.5 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-amber-300/90">
+          <span>🏆 Scoreboard & Round {G.currentRound} Standings</span>
+          <span className="text-[0.65rem] text-emerald-100/60 font-normal normal-case">
+            (Goal: Fewest Penalty Points)
+          </span>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           {G.players.map((p) => {
             const handBulls = p.hand.reduce((sum, c) => sum + c.points, 0);
             const pileBulls = p.personalPile.reduce((sum, c) => sum + c.points, 0);
-            const roundPenalty = handBulls * 1 + pileBulls * 2;
-            const totalScore = p.score + roundPenalty;
+            const liveRoundPenalty = handBulls * 1 + pileBulls * 2;
+            const totalScore = p.score + liveRoundPenalty;
 
             return (
               <div
                 key={p.id}
-                className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold ${
+                className={`flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs transition ${
                   p.id === humanPlayerId
-                    ? "border-amber-400/80 bg-amber-400/15 text-amber-200 ring-1 ring-amber-300/40"
-                    : "border-white/10 bg-black/30 text-emerald-100/80"
+                    ? "border-amber-400 bg-amber-400/20 text-amber-100 font-bold ring-2 ring-amber-400/40"
+                    : "border-white/10 bg-black/40 text-emerald-100/90 font-medium"
                 }`}
               >
-                <span>{p.isBot ? "🤖 " : ""}{p.name}:</span>
-                <span className="font-bold text-amber-300 tabular-nums">{totalScore} pts</span>
-                <span className="text-[0.65rem] text-emerald-100/50">
-                  (R{G.currentRound}: +{roundPenalty})
+                <span>{p.isBot ? "🤖 " : ""}{p.name}{p.id === humanPlayerId ? " (You)" : ""}:</span>
+                <span className="rounded bg-amber-400/20 px-1.5 py-0.5 font-extrabold text-amber-300 tabular-nums border border-amber-400/30">
+                  {totalScore} pts
+                </span>
+                <span className="text-[0.65rem] text-emerald-100/60">
+                  (R{G.currentRound}: +{liveRoundPenalty}pts)
                 </span>
                 {p.faceDownCard ? (
-                  <span className="text-emerald-300 font-bold">✓</span>
+                  <span className="rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[0.65rem] font-bold text-emerald-300">
+                    Ready ✓
+                  </span>
                 ) : (
-                  <span className="text-emerald-200/40">…</span>
+                  <span className="text-[0.65rem] text-emerald-200/40 italic">
+                    thinking…
+                  </span>
                 )}
               </div>
             );
