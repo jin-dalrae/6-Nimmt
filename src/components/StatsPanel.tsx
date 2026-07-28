@@ -318,7 +318,7 @@ export function StatsPanel() {
 
           <p className="text-[0.65rem] text-emerald-100/35">
             Stats start from deploy of this feature. Display names only (no emails/IPs).
-            Game: 6 Nimmt.
+            Game: Take 5.
           </p>
         </div>
       ) : null}

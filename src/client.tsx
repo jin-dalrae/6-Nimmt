@@ -27,6 +27,7 @@ import { Lobby } from "./components/Lobby";
 import { GameBoard } from "./components/GameBoard";
 import { StatsPanel } from "./components/StatsPanel";
 import { MrJackApp } from "./mrjack/MrJackApp";
+import { TakeANumberApp } from "./takeanumber/TakeANumberApp";
 
 function randomCode(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -338,7 +339,7 @@ function App() {
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0 flex-1 text-left sm:text-center sm:flex-none">
               <h1 className="truncate font-bold tracking-tight">
-                6 Nimmt! <span className="text-amber-300">🐂</span>
+                Take 5! <span className="text-amber-300">🐂</span>
               </h1>
               <p className="mt-0.5 truncate text-xs text-emerald-100/70">{subtitle}</p>
             </div>
@@ -354,7 +355,7 @@ function App() {
               SFboardgames
             </p>
             <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">
-              6 Nimmt! <span className="text-amber-300">🐂</span>
+              Take 5! <span className="text-amber-300">🐂</span>
             </h1>
             <p className="mt-2 text-sm text-emerald-100/70">{subtitle}</p>
           </>
@@ -421,17 +422,18 @@ function App() {
             >
               Play solo vs AI (3 bots)
             </button>
-            <button
-              type="button"
-              className="rounded-xl border border-white/20 px-4 py-3 text-emerald-100 hover:bg-white/5"
-              onClick={() => {
-                const code = randomCode();
-                setRoomInput(code);
-                enterRoom(code);
-              }}
+            <a
+              href="/take-a-number"
+              className="rounded-xl border border-amber-400/50 bg-amber-500/15 px-4 py-3 font-medium text-amber-100 hover:bg-amber-500/25 text-center"
             >
-              New random room
-            </button>
+              Play Take a Number (X nimmt!) 🔢
+            </a>
+            <a
+              href="/mrjack"
+              className="rounded-xl border border-violet-400/50 bg-violet-500/15 px-4 py-3 font-medium text-violet-100 hover:bg-violet-500/25 text-center"
+            >
+              Play Mr. Jack 🕵️
+            </a>
           </div>
 
           {recentRooms.length > 0 ? (
@@ -671,22 +673,35 @@ function App() {
 }
 
 function Root() {
-  // Support /mrjack, /mrjack/, and ?game=mrjack (cache-bust friendly)
   const path = (window.location.pathname.replace(/\/+$/, "") || "/").toLowerCase();
   const q = new URLSearchParams(window.location.search).get("game");
   const isMrJack =
     path === "/mrjack" ||
     path.endsWith("/mrjack") ||
     q === "mrjack";
+  const isTakeANumber =
+    path === "/take-a-number" ||
+    path.endsWith("/take-a-number") ||
+    path === "/takeanumber" ||
+    path.endsWith("/takeanumber") ||
+    q === "take-a-number" ||
+    q === "takeanumber";
 
   useEffect(() => {
-    document.title = isMrJack
-      ? "SFboardgames · Mr. Jack"
-      : "SFboardgames · 6 Nimmt!";
-  }, [isMrJack]);
+    if (isMrJack) {
+      document.title = "SFboardgames · Mr. Jack";
+    } else if (isTakeANumber) {
+      document.title = "SFboardgames · Take a Number";
+    } else {
+      document.title = "SFboardgames · Take 5!";
+    }
+  }, [isMrJack, isTakeANumber]);
 
   if (isMrJack) {
     return <MrJackApp />;
+  }
+  if (isTakeANumber) {
+    return <TakeANumberApp />;
   }
   return <App />;
 }

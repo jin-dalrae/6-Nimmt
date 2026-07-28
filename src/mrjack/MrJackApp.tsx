@@ -649,7 +649,7 @@ export function MrJackApp() {
           <div className="mt-6 rounded-xl border border-sky-400/30 bg-sky-950/30 p-4">
             <h2 className="text-sm font-semibold text-sky-100">Play online</h2>
             <p className="mt-1 text-xs text-emerald-100/55">
-              Like 6 Nimmt — share a room code. 2 players: Detective vs Mr. Jack.
+              Like Take 5 — share a room code. 2 players: Detective vs Mr. Jack.
             </p>
             <label className="mt-3 mb-1 block text-sm text-emerald-100/80">Your name</label>
             <input
@@ -756,7 +756,7 @@ export function MrJackApp() {
             href="/"
             className="mt-4 block text-center text-sm text-emerald-100/60 hover:text-emerald-100"
           >
-            ← Back to 6 Nimmt!
+            ← Back to Take 5!
           </a>
         </div>
       </div>
@@ -799,7 +799,7 @@ export function MrJackApp() {
               href="/"
               className="rounded-full border border-white/15 px-3 py-1 text-xs hover:bg-white/5"
             >
-              6 Nimmt!
+              Take 5!
             </a>
             <button
               type="button"

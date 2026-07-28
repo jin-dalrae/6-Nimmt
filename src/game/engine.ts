@@ -240,7 +240,7 @@ export function isBetweenDeals(G: GameState): boolean {
 }
 
 function switchToNextPlayer(G: GameState): GameState {
-  // Official 6 Nimmt: once someone reaches the threshold, finish the *current deal*
+  // Official Take 5 / 6 Nimmt: once someone reaches the threshold, finish the *current deal*
   // (all cards from hands), then stop — do not deal another hand.
   if (ended(G)) {
     finalizeEnded(G);

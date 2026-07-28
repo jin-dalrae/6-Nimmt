@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "SFboardgames — real-time multiplayer 6 Nimmt! on Cloudflare Pages + Workers",
+  "description": "SFboardgames — real-time multiplayer Take 5! (6 Nimmt) on Cloudflare Pages + Workers",
   "scripts": {
     "dev": "vite dev",
     "start": "vite dev",

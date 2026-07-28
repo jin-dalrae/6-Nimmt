@@ -1,6 +1,6 @@
 /**
  * Online Mr. Jack room — PartyServer Durable Object (2 players).
- * Same hosting pattern as 6 Nimmt GameRoom.
+ * Same hosting pattern as Take 5 GameRoom.
  */
 
 import { Connection, Server } from "partyserver";

@@ -1,6 +1,6 @@
-# SFboardgames · 6 Nimmt!
+# SFboardgames · Take 5!
 
-Real-time multiplayer **6 Nimmt!** (Take 6!) for you and friends in the browser.
+Real-time multiplayer **Take 5!** (6 Nimmt / Take 6) for you and friends in the browser.
 
 Built on **Cloudflare Pages + Workers** with **PartyServer** (Durable Objects + WebSockets).
 
@@ -19,10 +19,11 @@ Template pattern from [threepointone/partyvite](https://github.com/threepointone
 
 | Path | Game |
 |------|------|
-| `/` | **6 Nimmt!** multiplayer |
+| `/` | **Take 5!** multiplayer |
+| `/take-a-number` | **Take a Number** (*X nimmt!*) — 3 center rows (3, 4, 5 max) + Personal # Row vs AI. |
 | `/mrjack` | **Mr. Jack** — 2-player deduction (local / vs AI). Unofficial fan adaptation. |
 
-## Play (6 Nimmt!)
+## Play (Take 5!)
 
 1. Open the site, enter a name.
 2. **Create room** (or enter a friend’s code) and share the code / invite link.

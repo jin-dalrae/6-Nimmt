@@ -239,7 +239,7 @@ export async function chooseCardForBot(
     try {
       const text = await geminiJson(
         apiKey!,
-        `You play 6 Nimmt! (Take 6). Goal: fewest bull-head points.
+        `You play Take 5! (6 Nimmt / Take 6). Goal: fewest bull-head points.
 Rules: play one card face-down; lowest card places first on the row ending with the highest number still below it; 6th card takes the row (score those points). If card is lower than all row ends, player chooses a row to take.
 ${stylePrompt(style)}
 ${boardSummary(G, playerIndex)}
@@ -280,7 +280,7 @@ export async function placeRowForBot(
         .join("\n");
       const text = await geminiJson(
         apiKey!,
-        `You must take one entire row in 6 Nimmt! (your card is too low).
+        `You must take one entire row in Take 5! (your card is too low).
 ${stylePrompt(style)}
 Your card: ${G.players[playerIndex].faceDownCard?.number}
 Options:\n${costs}
@@ -303,7 +303,7 @@ Reply JSON only: {"row": <0-3>}`,
 export const BOT_NAMES = [
   "Gemini",
   "Bull Bot",
-  "Nimmt-o",
+  "Take-5-o",
   "Card Shark",
   "Row Runner",
   "Six-Averse",

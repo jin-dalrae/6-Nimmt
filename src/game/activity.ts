@@ -205,7 +205,7 @@ function bullsWord(n: number): string {
 }
 
 /**
- * Official 6 Nimmt takes (both score the row’s bull heads):
+ * Official Take 5 / 6 Nimmt takes (both score the row’s bull heads):
  * 1) Full row — card fits the closest lower end, but that row already has 5 cards
  *    (6th card). Player must take those 5; their card starts the row.
  * 2) Lowest card — card is lower than every row end. Player chooses any row to
