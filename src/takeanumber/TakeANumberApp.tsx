@@ -221,9 +221,41 @@ export function TakeANumberApp() {
         </div>
       </header>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_20rem]">
-        <div className="min-w-0 space-y-6">
-          <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 backdrop-blur-md">
+      <div className="mb-4 rounded-xl border border-white/10 bg-slate-900/60 p-2 sm:p-2.5 backdrop-blur-md">
+        <div className="flex flex-wrap items-center gap-2">
+          {G.players.map((p) => {
+            const handBulls = p.hand.reduce((sum, c) => sum + c.points, 0);
+            const pileBulls = p.personalPile.reduce((sum, c) => sum + c.points, 0);
+            const roundPenalty = handBulls * 1 + pileBulls * 2;
+            const totalScore = p.score + roundPenalty;
+
+            return (
+              <div
+                key={p.id}
+                className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold ${
+                  p.id === humanPlayerId
+                    ? "border-amber-400/80 bg-amber-400/15 text-amber-200 ring-1 ring-amber-300/40"
+                    : "border-white/10 bg-black/30 text-emerald-100/80"
+                }`}
+              >
+                <span>{p.isBot ? "🤖 " : ""}{p.name}:</span>
+                <span className="font-bold text-amber-300 tabular-nums">{totalScore} pts</span>
+                <span className="text-[0.65rem] text-emerald-100/50">
+                  (R{G.currentRound}: +{roundPenalty})
+                </span>
+                {p.faceDownCard ? (
+                  <span className="text-emerald-300 font-bold">✓</span>
+                ) : (
+                  <span className="text-emerald-200/40">…</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 backdrop-blur-md">
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-amber-300/90">
               Center Rows
             </h2>
@@ -339,68 +371,116 @@ export function TakeANumberApp() {
 
           {/* Players status & Personal Rows / Piles */}
           <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {G.players.map((p, idx) => (
-              <div
-                key={p.id}
-                className={`rounded-xl border p-3 ${
-                  idx === G.activePlayerIndex
-                    ? "border-amber-300/80 bg-amber-400/10"
-                    : "border-white/10 bg-slate-900/40"
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-white text-sm">
-                    {p.name} {p.id === humanPlayerId ? "(You)" : ""}
-                  </span>
-                  <span className="text-xs font-semibold text-amber-300">
-                    Score: {p.score} pts
-                  </span>
-                </div>
+            {G.players.map((p, idx) => {
+              const handBulls = p.hand.reduce((sum, c) => sum + c.points, 0);
+              const pileBulls = p.personalPile.reduce((sum, c) => sum + c.points, 0);
+              const handPts = handBulls * 1;
+              const pilePts = pileBulls * 2;
+              const liveRoundPts = handPts + pilePts;
 
-                <div className="mt-2 text-[0.7rem] text-emerald-100/70">
-                  Hand: {p.hand.length} cards · Face-down:{" "}
-                  {p.faceDownCard ? "Selected" : "Waiting"}
-                </div>
-
-                <div className="mt-2 border-t border-white/10 pt-2">
-                  <div className="text-[0.65rem] font-semibold text-amber-200/90 mb-1">
-                    Personal # Row (0pt Safe):
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1">
-                    {p.personalRow.length > 0 ? (
-                      p.personalRow.map((c) => (
-                        <CardView key={c.number} card={c} size="sm" />
-                      ))
-                    ) : (
-                      <span className="text-[0.65rem] text-emerald-100/40">Empty</span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Personal # Pile */}
-                <div className="mt-2 border-t border-rose-500/20 pt-2">
-                  <div className="flex items-center justify-between text-[0.65rem] font-semibold text-rose-300 mb-1">
-                    <span># Pile (2x Penalty):</span>
-                    <span>
-                      {p.personalPile.reduce((sum, c) => sum + c.points * 2, 0)} pts (
-                      {p.personalPile.reduce((sum, c) => sum + c.points, 0)} 🐂)
+              return (
+                <div
+                  key={p.id}
+                  className={`rounded-xl border p-3 ${
+                    idx === G.activePlayerIndex
+                      ? "border-amber-300/80 bg-amber-400/10"
+                      : "border-white/10 bg-slate-900/40"
+                  }`}
+                >
+                  <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                    <span className="font-bold text-white text-sm">
+                      {p.name} {p.id === humanPlayerId ? "(You)" : ""}
                     </span>
+                    <div className="text-right">
+                      <div className="text-xs font-bold text-amber-300">
+                        Total: {p.score + liveRoundPts} pts
+                      </div>
+                      <div className="text-[0.65rem] text-emerald-100/60">
+                        Round {G.currentRound}: +{liveRoundPts} pts ({handBulls + pileBulls} 🐂)
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-1">
-                    {p.personalPile.length > 0 ? (
-                      p.personalPile.map((c, i) => (
-                        <CardView key={`${c.number}-${i}`} card={c} size="sm" hot />
-                      ))
-                    ) : (
-                      <span className="text-[0.65rem] text-emerald-100/40">None (0 penalty)</span>
-                    )}
+
+                  <div className="mt-2 flex items-center justify-between text-[0.7rem] text-emerald-100/70">
+                    <span>Hand Cards: {p.hand.length} (+{handPts} pts)</span>
+                    <span>Status: {p.faceDownCard ? "✓ Card Selected" : "Choosing..."}</span>
+                  </div>
+
+                  <div className="mt-2 border-t border-white/10 pt-2">
+                    <div className="text-[0.65rem] font-semibold text-amber-200/90 mb-1">
+                      Personal # Row (0pt Safe):
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1">
+                      {p.personalRow.length > 0 ? (
+                        p.personalRow.map((c) => (
+                          <CardView key={c.number} card={c} size="sm" />
+                        ))
+                      ) : (
+                        <span className="text-[0.65rem] text-emerald-100/40">Empty</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-2 border-t border-rose-500/20 pt-2">
+                    <div className="flex items-center justify-between text-[0.65rem] font-semibold text-rose-300 mb-1">
+                      <span># Pile (2x Penalty):</span>
+                      <span className="font-bold text-rose-300">
+                        +{pilePts} pts ({pileBulls} 🐂 × 2)
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1">
+                      {p.personalPile.length > 0 ? (
+                        p.personalPile.map((c, i) => (
+                          <CardView key={`${c.number}-${i}`} card={c} size="sm" hot />
+                        ))
+                      ) : (
+                        <span className="text-[0.65rem] text-emerald-100/40">None (0 penalty)</span>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </section>
 
-          {/* Game Log */}
+          {humanPlayer && (
+            <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-3 sm:p-4 backdrop-blur-md shadow-2xl">
+              <div className="mb-2 flex items-center justify-between">
+                <h2 className="text-xs sm:text-sm font-semibold uppercase tracking-wider text-amber-300/90 flex items-center gap-2">
+                  <span>Your Hand</span>
+                  <span className="text-xs font-normal normal-case text-emerald-100/60">
+                    ({humanPlayer.hand.length} cards)
+                  </span>
+                </h2>
+                {G.phase === Phase.ChooseCard && !humanPlayer.faceDownCard && (
+                  <span className="text-xs font-semibold text-amber-200">
+                    Tap a card to play
+                  </span>
+                )}
+                {humanPlayer.faceDownCard && (
+                  <span className="text-xs font-semibold text-emerald-300">
+                    Selected Card: #{humanPlayer.faceDownCard.number} ({humanPlayer.faceDownCard.points} 🐂)
+                  </span>
+                )}
+              </div>
+
+              <div className="hand-scroll flex items-end gap-2 overflow-x-auto pb-1 pt-2">
+                {humanPlayer.hand.map((card) => {
+                  const isChosen = humanPlayer.faceDownCard?.number === card.number;
+                  return (
+                    <CardView
+                      key={card.number}
+                      card={card}
+                      selected={isChosen}
+                      selectable={G.phase === Phase.ChooseCard && !humanPlayer.faceDownCard}
+                      onClick={() => handleChooseCard(humanIdx, card.number)}
+                    />
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
           <section className="rounded-2xl border border-white/10 bg-black/40 p-3">
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-emerald-100/50">
               Game Log
@@ -412,47 +492,6 @@ export function TakeANumberApp() {
             </div>
           </section>
         </div>
-
-        <div className="lg:w-80 shrink-0">
-          <section className="sticky top-4 rounded-2xl border border-white/10 bg-slate-900/80 p-4 backdrop-blur-md shadow-xl">
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-amber-300/90 flex items-center justify-between">
-              <span>Your Hand</span>
-              <span className="text-xs font-normal text-emerald-100/60">
-                {humanPlayer ? `${humanPlayer.hand.length} cards` : ""}
-              </span>
-            </h2>
-
-            {humanPlayer ? (
-              <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-2 gap-2 max-h-[70vh] overflow-y-auto p-1">
-                {humanPlayer.hand.map((card) => {
-                  const isChosen = humanPlayer.faceDownCard?.number === card.number;
-                  return (
-                    <div key={card.number} className="flex justify-center">
-                      <CardView
-                        card={card}
-                        selected={isChosen}
-                        selectable={G.phase === Phase.ChooseCard && !humanPlayer.faceDownCard}
-                        onClick={() => handleChooseCard(humanIdx, card.number)}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-xs text-emerald-100/50">No active hand</p>
-            )}
-
-            {humanPlayer?.faceDownCard && (
-              <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-400/10 p-2.5 text-center text-xs text-amber-200">
-                <span>Selected Card: </span>
-                <strong className="font-bold text-white">
-                  #{humanPlayer.faceDownCard.number} ({humanPlayer.faceDownCard.points} 🐂)
-                </strong>
-              </div>
-            )}
-          </section>
-        </div>
-      </div>
 
       {showRules && <RulesModal onClose={() => setShowRules(false)} />}
     </div>
