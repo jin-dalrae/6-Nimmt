@@ -138,14 +138,13 @@ export function resolveTurn(G: GameState): GameState {
       G.phase = Phase.PickPersonalCard;
       G.activePlayerIndex = lowestIdx;
       G.log.push(
-        `${p.name} placed ${card.number} on Row ${bestRowIdx + 1} (capacity ${targetRow.capacity}) and took ${taken.length} card(s)!`,
+        `${p.name} placed ${card.number} on the ${targetRow.capacity}-Cards Row and took ${taken.length} card(s)!`,
       );
       return { ...G };
     } else {
-      // Fits normally in row
       targetRow.cards.push(card);
       p.faceDownCard = null;
-      G.log.push(`${p.name} placed ${card.number} on Row ${bestRowIdx + 1}.`);
+      G.log.push(`${p.name} placed ${card.number} on the ${targetRow.capacity}-Cards Row.`);
     }
   }
 
@@ -174,7 +173,7 @@ export function chooseRowToTake(G: GameState, playerIndex: number, rowIndex: num
   p.pendingTakenCards = taken;
 
   G.phase = Phase.PickPersonalCard;
-  G.log.push(`${p.name} chose Row ${rowIndex + 1} and took ${taken.length} card(s).`);
+  G.log.push(`${p.name} chose the ${targetRow.capacity}-Cards Row and took ${taken.length} card(s).`);
 
   return { ...G };
 }

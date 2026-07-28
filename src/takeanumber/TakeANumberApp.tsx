@@ -243,12 +243,12 @@ export function TakeANumberApp() {
                 }`}
                 onClick={isTargetChoice ? () => handleChooseRow(humanIdx, rIdx) : undefined}
               >
-                <div className="w-24 shrink-0">
+                <div className="w-28 shrink-0">
                   <span className="text-xs font-bold text-amber-200">
-                    Row {rIdx + 1}
+                    {row.capacity}-Cards Row
                   </span>
                   <div className="text-[0.65rem] text-emerald-100/60">
-                    {row.cards.length} / {row.capacity} cards
+                    {row.cards.length} / {row.capacity} cards max
                   </div>
                 </div>
 
