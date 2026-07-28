@@ -181,7 +181,7 @@ export function TakeANumberApp() {
   const humanPlayer = humanIdx !== -1 ? G.players[humanIdx] : null;
 
   return (
-    <div className="mx-auto max-w-5xl px-3 py-4 sm:px-4 sm:py-6">
+    <div className="mx-auto max-w-6xl px-3 py-4 sm:px-4 sm:py-6">
       {/* Top Header */}
       <header className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
         <div>
@@ -221,203 +221,238 @@ export function TakeANumberApp() {
         </div>
       </header>
 
-      {/* Center Rows (Capacities 3, 4, 5) */}
-      <section className="mb-6 rounded-2xl border border-white/10 bg-slate-900/60 p-4 backdrop-blur-md">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-amber-300/90">
-          Center Rows
-        </h2>
-        <div className="space-y-3">
-          {G.centerRows.map((row, rIdx) => {
-            const isTargetChoice =
-              G.phase === Phase.PlaceCard &&
-              G.activePlayerIndex === humanIdx &&
-              humanPlayer?.faceDownCard !== null;
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_20rem]">
+        <div className="min-w-0 space-y-6">
+          <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 backdrop-blur-md">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-amber-300/90">
+              Center Rows
+            </h2>
+            <div className="space-y-3">
+              {G.centerRows.map((row, rIdx) => {
+                const isTargetChoice =
+                  G.phase === Phase.PlaceCard &&
+                  G.activePlayerIndex === humanIdx &&
+                  humanPlayer?.faceDownCard !== null;
 
-            return (
-              <div
-                key={rIdx}
-                className={`flex flex-wrap items-center gap-2 rounded-xl border p-2.5 transition ${
-                  isTargetChoice
-                    ? "border-amber-400 bg-amber-400/10 cursor-pointer hover:bg-amber-400/20"
-                    : "border-white/10 bg-black/20"
-                }`}
-                onClick={isTargetChoice ? () => handleChooseRow(humanIdx, rIdx) : undefined}
+                return (
+                  <div
+                    key={rIdx}
+                    className={`flex flex-wrap items-center gap-2 rounded-xl border p-2.5 transition ${
+                      isTargetChoice
+                        ? "border-amber-400 bg-amber-400/10 cursor-pointer hover:bg-amber-400/20"
+                        : "border-white/10 bg-black/20"
+                    }`}
+                    onClick={isTargetChoice ? () => handleChooseRow(humanIdx, rIdx) : undefined}
+                  >
+                    <div className="w-28 shrink-0">
+                      <span className="text-xs font-bold text-amber-200">
+                        {row.capacity}-Cards Row
+                      </span>
+                      <div className="text-[0.65rem] text-emerald-100/60">
+                        {row.cards.length} / {row.capacity} cards max
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {row.cards.map((card, cIdx) => (
+                        <CardView key={cIdx} card={card} size="sm" />
+                      ))}
+                    </div>
+
+                    {isTargetChoice && (
+                      <button
+                        type="button"
+                        className="ml-auto rounded-lg bg-amber-400 px-3 py-1 text-xs font-bold text-slate-950 shadow"
+                      >
+                        Take Row
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          {/* Personal # Row Choice Overlay Modal */}
+          {G.phase === Phase.PickPersonalCard &&
+            G.activePlayerIndex === humanIdx &&
+            humanPlayer?.pendingTakenCards && (
+              <div className="rounded-2xl border border-amber-400/50 bg-amber-950/80 p-4 shadow-2xl backdrop-blur-md">
+                <h3 className="text-base font-bold text-amber-200">
+                  Pick 1 Card for your Personal # Row (X Row)
+                </h3>
+                <p className="mt-1 text-xs text-amber-100/80">
+                  The card you pick will go into your personal # Row (must be higher than last card).
+                  The remaining cards will go into your hand!
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {humanPlayer.pendingTakenCards.map((card) => (
+                    <CardView
+                      key={card.number}
+                      card={card}
+                      selectable
+                      onClick={() => handlePickPersonal(humanIdx, card.number)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+          {/* Round End / Game Over Overlay */}
+          {G.phase === Phase.BetweenRounds && (
+            <div className="rounded-2xl border border-amber-300/40 bg-amber-950/70 p-6 text-center shadow-xl">
+              <h3 className="text-xl font-bold text-amber-200">
+                Round {G.currentRound} Complete!
+              </h3>
+              <p className="mt-2 text-sm text-emerald-100/80">
+                Scores tallied! Ready for Round {G.currentRound + 1}?
+              </p>
+              <button
+                type="button"
+                onClick={() => setG((prev) => (prev ? startNextRound(prev) : prev))}
+                className="mt-4 rounded-xl bg-amber-400 px-6 py-2.5 font-bold text-slate-950 shadow hover:bg-amber-300"
               >
-                <div className="w-28 shrink-0">
-                  <span className="text-xs font-bold text-amber-200">
-                    {row.capacity}-Cards Row
+                Start Round {G.currentRound + 1}
+              </button>
+            </div>
+          )}
+
+          {G.phase === Phase.Ended && (
+            <div className="rounded-2xl border border-emerald-400/40 bg-emerald-950/80 p-6 text-center shadow-xl">
+              <h3 className="text-2xl font-bold text-emerald-200">🏆 Game Finished!</h3>
+              <p className="mt-2 text-sm text-emerald-100/90">
+                Final Winner:{" "}
+                <span className="font-bold text-amber-300">
+                  {[...G.players].sort((a, b) => a.score - b.score)[0]?.name}
+                </span>{" "}
+                with fewest penalty points!
+              </p>
+              <button
+                type="button"
+                onClick={handleStartGame}
+                className="mt-4 rounded-xl bg-amber-400 px-6 py-2.5 font-bold text-slate-950 shadow hover:bg-amber-300"
+              >
+                Play Again
+              </button>
+            </div>
+          )}
+
+          {/* Players status & Personal Rows / Piles */}
+          <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {G.players.map((p, idx) => (
+              <div
+                key={p.id}
+                className={`rounded-xl border p-3 ${
+                  idx === G.activePlayerIndex
+                    ? "border-amber-300/80 bg-amber-400/10"
+                    : "border-white/10 bg-slate-900/40"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-white text-sm">
+                    {p.name} {p.id === humanPlayerId ? "(You)" : ""}
                   </span>
-                  <div className="text-[0.65rem] text-emerald-100/60">
-                    {row.cards.length} / {row.capacity} cards max
+                  <span className="text-xs font-semibold text-amber-300">
+                    Score: {p.score} pts
+                  </span>
+                </div>
+
+                <div className="mt-2 text-[0.7rem] text-emerald-100/70">
+                  Hand: {p.hand.length} cards · Face-down:{" "}
+                  {p.faceDownCard ? "Selected" : "Waiting"}
+                </div>
+
+                <div className="mt-2 border-t border-white/10 pt-2">
+                  <div className="text-[0.65rem] font-semibold text-amber-200/90 mb-1">
+                    Personal # Row (0pt Safe):
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1">
+                    {p.personalRow.length > 0 ? (
+                      p.personalRow.map((c) => (
+                        <CardView key={c.number} card={c} size="sm" />
+                      ))
+                    ) : (
+                      <span className="text-[0.65rem] text-emerald-100/40">Empty</span>
+                    )}
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  {row.cards.map((card, cIdx) => (
-                    <CardView key={cIdx} card={card} size="sm" />
-                  ))}
+                {/* Personal # Pile */}
+                <div className="mt-2 border-t border-rose-500/20 pt-2">
+                  <div className="flex items-center justify-between text-[0.65rem] font-semibold text-rose-300 mb-1">
+                    <span># Pile (2x Penalty):</span>
+                    <span>
+                      {p.personalPile.reduce((sum, c) => sum + c.points * 2, 0)} pts (
+                      {p.personalPile.reduce((sum, c) => sum + c.points, 0)} 🐂)
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1">
+                    {p.personalPile.length > 0 ? (
+                      p.personalPile.map((c, i) => (
+                        <CardView key={`${c.number}-${i}`} card={c} size="sm" hot />
+                      ))
+                    ) : (
+                      <span className="text-[0.65rem] text-emerald-100/40">None (0 penalty)</span>
+                    )}
+                  </div>
                 </div>
-
-                {isTargetChoice && (
-                  <button
-                    type="button"
-                    className="ml-auto rounded-lg bg-amber-400 px-3 py-1 text-xs font-bold text-slate-950 shadow"
-                  >
-                    Take Row
-                  </button>
-                )}
               </div>
-            );
-          })}
-        </div>
-      </section>
+            ))}
+          </section>
 
-      {/* Personal # Row Choice Overlay Modal */}
-      {G.phase === Phase.PickPersonalCard &&
-        G.activePlayerIndex === humanIdx &&
-        humanPlayer?.pendingTakenCards && (
-          <div className="mb-6 rounded-2xl border border-amber-400/50 bg-amber-950/80 p-4 shadow-2xl backdrop-blur-md">
-            <h3 className="text-base font-bold text-amber-200">
-              Pick 1 Card for your Personal # Row (X Row)
+          {/* Game Log */}
+          <section className="rounded-2xl border border-white/10 bg-black/40 p-3">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-emerald-100/50">
+              Game Log
             </h3>
-            <p className="mt-1 text-xs text-amber-100/80">
-              The card you pick will go into your personal # Row (must be higher than last card).
-              The remaining cards will go into your hand!
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {humanPlayer.pendingTakenCards.map((card) => (
-                <CardView
-                  key={card.number}
-                  card={card}
-                  selectable
-                  onClick={() => handlePickPersonal(humanIdx, card.number)}
-                />
+            <div className="max-h-32 overflow-y-auto space-y-1 font-mono text-[0.7rem] text-emerald-100/70">
+              {G.log.slice(-10).map((line, i) => (
+                <div key={i}>{line}</div>
               ))}
             </div>
-          </div>
-        )}
+          </section>
+        </div>
 
-      {/* Players status & Personal Rows */}
-      <section className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {G.players.map((p, idx) => (
-          <div
-            key={p.id}
-            className={`rounded-xl border p-3 ${
-              idx === G.activePlayerIndex
-                ? "border-amber-300/80 bg-amber-400/10"
-                : "border-white/10 bg-slate-900/40"
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-white text-sm">
-                {p.name} {p.id === humanPlayerId ? "(You)" : ""}
+        <div className="lg:w-80 shrink-0">
+          <section className="sticky top-4 rounded-2xl border border-white/10 bg-slate-900/80 p-4 backdrop-blur-md shadow-xl">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-amber-300/90 flex items-center justify-between">
+              <span>Your Hand</span>
+              <span className="text-xs font-normal text-emerald-100/60">
+                {humanPlayer ? `${humanPlayer.hand.length} cards` : ""}
               </span>
-              <span className="text-xs font-semibold text-amber-300">
-                Score: {p.score} pts
-              </span>
-            </div>
+            </h2>
 
-            <div className="mt-2 text-[0.7rem] text-emerald-100/70">
-              Hand: {p.hand.length} cards · Face-down:{" "}
-              {p.faceDownCard ? "Selected" : "Waiting"}
-            </div>
-
-            <div className="mt-2 border-t border-white/10 pt-2">
-              <div className="text-[0.65rem] font-semibold text-amber-200/90 mb-1">
-                Personal # Row (0pt Safe):
+            {humanPlayer ? (
+              <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-2 gap-2 max-h-[70vh] overflow-y-auto p-1">
+                {humanPlayer.hand.map((card) => {
+                  const isChosen = humanPlayer.faceDownCard?.number === card.number;
+                  return (
+                    <div key={card.number} className="flex justify-center">
+                      <CardView
+                        card={card}
+                        selected={isChosen}
+                        selectable={G.phase === Phase.ChooseCard && !humanPlayer.faceDownCard}
+                        onClick={() => handleChooseCard(humanIdx, card.number)}
+                      />
+                    </div>
+                  );
+                })}
               </div>
-              <div className="flex flex-wrap items-center gap-1">
-                {p.personalRow.length > 0 ? (
-                  p.personalRow.map((c) => (
-                    <CardView key={c.number} card={c} size="sm" />
-                  ))
-                ) : (
-                  <span className="text-[0.65rem] text-emerald-100/40">Empty</span>
-                )}
+            ) : (
+              <p className="text-xs text-emerald-100/50">No active hand</p>
+            )}
+
+            {humanPlayer?.faceDownCard && (
+              <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-400/10 p-2.5 text-center text-xs text-amber-200">
+                <span>Selected Card: </span>
+                <strong className="font-bold text-white">
+                  #{humanPlayer.faceDownCard.number} ({humanPlayer.faceDownCard.points} 🐂)
+                </strong>
               </div>
-            </div>
-
-            {/* Personal # Pile */}
-            <div className="mt-1 text-[0.65rem] text-rose-300/80">
-              # Pile (2x Penalty): {p.personalPile.length} cards
-            </div>
-          </div>
-        ))}
-      </section>
-
-      {/* Human Player Hand */}
-      {humanPlayer && G.phase === Phase.ChooseCard && (
-        <section className="mb-6 rounded-2xl border border-white/10 bg-slate-900/60 p-4 backdrop-blur-md">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-amber-300/90">
-            Your Hand (Pick 1 card)
-          </h2>
-          <div className="flex flex-wrap gap-2">
-            {humanPlayer.hand.map((card) => {
-              const isChosen = humanPlayer.faceDownCard?.number === card.number;
-              return (
-                <CardView
-                  key={card.number}
-                  card={card}
-                  selected={isChosen}
-                  selectable={!humanPlayer.faceDownCard}
-                  onClick={() => handleChooseCard(humanIdx, card.number)}
-                />
-              );
-            })}
-          </div>
-        </section>
-      )}
-
-      {/* Round End / Game Over Overlay */}
-      {G.phase === Phase.BetweenRounds && (
-        <div className="mb-6 rounded-2xl border border-amber-300/40 bg-amber-950/70 p-6 text-center shadow-xl">
-          <h3 className="text-xl font-bold text-amber-200">
-            Round {G.currentRound} Complete!
-          </h3>
-          <p className="mt-2 text-sm text-emerald-100/80">
-            Scores tallied! Ready for Round {G.currentRound + 1}?
-          </p>
-          <button
-            type="button"
-            onClick={() => setG((prev) => (prev ? startNextRound(prev) : prev))}
-            className="mt-4 rounded-xl bg-amber-400 px-6 py-2.5 font-bold text-slate-950 shadow hover:bg-amber-300"
-          >
-            Start Round {G.currentRound + 1}
-          </button>
+            )}
+          </section>
         </div>
-      )}
-
-      {G.phase === Phase.Ended && (
-        <div className="mb-6 rounded-2xl border border-emerald-400/40 bg-emerald-950/80 p-6 text-center shadow-xl">
-          <h3 className="text-2xl font-bold text-emerald-200">🏆 Game Finished!</h3>
-          <p className="mt-2 text-sm text-emerald-100/90">
-            Final Winner:{" "}
-            <span className="font-bold text-amber-300">
-              {[...G.players].sort((a, b) => a.score - b.score)[0]?.name}
-            </span>{" "}
-            with fewest penalty points!
-          </p>
-          <button
-            type="button"
-            onClick={handleStartGame}
-            className="mt-4 rounded-xl bg-amber-400 px-6 py-2.5 font-bold text-slate-950 shadow hover:bg-amber-300"
-          >
-            Play Again
-          </button>
-        </div>
-      )}
-
-      {/* Game Log */}
-      <section className="rounded-2xl border border-white/10 bg-black/40 p-3">
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-emerald-100/50">
-          Game Log
-        </h3>
-        <div className="max-h-32 overflow-y-auto space-y-1 font-mono text-[0.7rem] text-emerald-100/70">
-          {G.log.slice(-10).map((line, i) => (
-            <div key={i}>{line}</div>
-          ))}
-        </div>
-      </section>
+      </div>
 
       {showRules && <RulesModal onClose={() => setShowRules(false)} />}
     </div>
