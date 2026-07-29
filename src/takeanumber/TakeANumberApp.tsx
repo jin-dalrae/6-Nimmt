@@ -230,10 +230,9 @@ export function TakeANumberApp() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {G.players.map((p) => {
-            const handBulls = p.hand.reduce((sum, c) => sum + c.points, 0);
             const pileBulls = p.personalPile.reduce((sum, c) => sum + c.points, 0);
-            const liveRoundPenalty = handBulls * 1 + pileBulls * 2;
-            const totalScore = p.score + liveRoundPenalty;
+            const pilePenalty = pileBulls * 2;
+            const currentTotal = p.score + pilePenalty;
 
             return (
               <div
@@ -246,11 +245,13 @@ export function TakeANumberApp() {
               >
                 <span>{p.isBot ? "🤖 " : ""}{p.name}{p.id === humanPlayerId ? " (You)" : ""}:</span>
                 <span className="rounded bg-amber-400/20 px-1.5 py-0.5 font-extrabold text-amber-300 tabular-nums border border-amber-400/30">
-                  {totalScore} pts
+                  {currentTotal} pts
                 </span>
-                <span className="text-[0.65rem] text-emerald-100/60">
-                  (R{G.currentRound}: +{liveRoundPenalty}pts)
-                </span>
+                {pilePenalty > 0 ? (
+                  <span className="text-[0.65rem] text-rose-300">
+                    (#Pile: +{pilePenalty})
+                  </span>
+                ) : null}
                 {p.faceDownCard ? (
                   <span className="rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[0.65rem] font-bold text-emerald-300">
                     Ready ✓
@@ -266,8 +267,9 @@ export function TakeANumberApp() {
         </div>
       </div>
 
-      <div className="space-y-6">
-        <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 backdrop-blur-md">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_22rem]">
+        <div className="min-w-0 space-y-6">
+          <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 backdrop-blur-md">
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-amber-300/90">
               Center Rows
             </h2>
@@ -384,11 +386,9 @@ export function TakeANumberApp() {
           {/* Players status & Personal Rows / Piles */}
           <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {G.players.map((p, idx) => {
-              const handBulls = p.hand.reduce((sum, c) => sum + c.points, 0);
               const pileBulls = p.personalPile.reduce((sum, c) => sum + c.points, 0);
-              const handPts = handBulls * 1;
               const pilePts = pileBulls * 2;
-              const liveRoundPts = handPts + pilePts;
+              const currentLiveScore = p.score + pilePts;
 
               return (
                 <div
@@ -405,16 +405,16 @@ export function TakeANumberApp() {
                     </span>
                     <div className="text-right">
                       <div className="text-xs font-bold text-amber-300">
-                        Total: {p.score + liveRoundPts} pts
+                        Total Penalty: {currentLiveScore} pts
                       </div>
                       <div className="text-[0.65rem] text-emerald-100/60">
-                        Round {G.currentRound}: +{liveRoundPts} pts ({handBulls + pileBulls} 🐂)
+                        (# Pile: +{pilePts} pts)
                       </div>
                     </div>
                   </div>
 
                   <div className="mt-2 flex items-center justify-between text-[0.7rem] text-emerald-100/70">
-                    <span>Hand Cards: {p.hand.length} (+{handPts} pts)</span>
+                    <span>Hand: {p.hand.length} cards</span>
                     <span>Status: {p.faceDownCard ? "✓ Card Selected" : "Choosing..."}</span>
                   </div>
 
@@ -455,9 +455,22 @@ export function TakeANumberApp() {
             })}
           </section>
 
+          <section className="rounded-2xl border border-white/10 bg-black/40 p-3">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-emerald-100/50">
+              Game Log
+            </h3>
+            <div className="max-h-32 overflow-y-auto space-y-1 font-mono text-[0.7rem] text-emerald-100/70">
+              {G.log.slice(-10).map((line, i) => (
+                <div key={i}>{line}</div>
+              ))}
+            </div>
+          </section>
+        </div>
+
+        <div className="lg:w-80 shrink-0">
           {humanPlayer && (
-            <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-3 sm:p-4 backdrop-blur-md shadow-2xl">
-              <div className="mb-2 flex items-center justify-between">
+            <section className="sticky top-4 rounded-2xl border border-white/10 bg-slate-900/80 p-3 sm:p-4 backdrop-blur-md shadow-2xl">
+              <div className="mb-2.5 flex items-center justify-between border-b border-white/10 pb-2">
                 <h2 className="text-xs sm:text-sm font-semibold uppercase tracking-wider text-amber-300/90 flex items-center gap-2">
                   <span>Your Hand</span>
                   <span className="text-xs font-normal normal-case text-emerald-100/60">
@@ -466,17 +479,17 @@ export function TakeANumberApp() {
                 </h2>
                 {G.phase === Phase.ChooseCard && !humanPlayer.faceDownCard && (
                   <span className="text-xs font-semibold text-amber-200">
-                    Tap a card to play
+                    Tap card
                   </span>
                 )}
                 {humanPlayer.faceDownCard && (
                   <span className="text-xs font-semibold text-emerald-300">
-                    Selected Card: #{humanPlayer.faceDownCard.number} ({humanPlayer.faceDownCard.points} 🐂)
+                    Selected #{humanPlayer.faceDownCard.number}
                   </span>
                 )}
               </div>
 
-              <div className="hand-scroll flex items-end gap-2 overflow-x-auto pb-1 pt-2">
+              <div className="flex flex-wrap gap-2 justify-center max-h-[75vh] overflow-y-auto p-1">
                 {humanPlayer.hand.map((card) => {
                   const isChosen = humanPlayer.faceDownCard?.number === card.number;
                   return (
@@ -492,18 +505,8 @@ export function TakeANumberApp() {
               </div>
             </section>
           )}
-
-          <section className="rounded-2xl border border-white/10 bg-black/40 p-3">
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-emerald-100/50">
-              Game Log
-            </h3>
-            <div className="max-h-32 overflow-y-auto space-y-1 font-mono text-[0.7rem] text-emerald-100/70">
-              {G.log.slice(-10).map((line, i) => (
-                <div key={i}>{line}</div>
-              ))}
-            </div>
-          </section>
         </div>
+      </div>
 
       {showRules && <RulesModal onClose={() => setShowRules(false)} />}
     </div>
