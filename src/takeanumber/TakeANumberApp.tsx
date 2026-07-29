@@ -230,9 +230,10 @@ export function TakeANumberApp() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {G.players.map((p) => {
+            const prevScore = p.score;
             const pileBulls = p.personalPile.reduce((sum, c) => sum + c.points, 0);
             const pilePenalty = pileBulls * 2;
-            const currentTotal = p.score + pilePenalty;
+            const totalScore = prevScore + pilePenalty;
 
             return (
               <div
@@ -244,14 +245,13 @@ export function TakeANumberApp() {
                 }`}
               >
                 <span>{p.isBot ? "🤖 " : ""}{p.name}{p.id === humanPlayerId ? " (You)" : ""}:</span>
-                <span className="rounded bg-amber-400/20 px-1.5 py-0.5 font-extrabold text-amber-300 tabular-nums border border-amber-400/30">
-                  {currentTotal} pts
+                <span className="rounded bg-amber-400/20 px-2 py-0.5 font-extrabold text-amber-300 tabular-nums border border-amber-400/30 text-xs">
+                  {totalScore} pts
                 </span>
-                {pilePenalty > 0 ? (
-                  <span className="text-[0.65rem] text-rose-300">
-                    (#Pile: +{pilePenalty})
-                  </span>
-                ) : null}
+                <span className="text-[0.65rem] text-emerald-100/60 font-mono">
+                  {prevScore > 0 ? `(Prev: ${prevScore}pt` : `(R${G.currentRound}: `}
+                  {pilePenalty > 0 ? ` + #Pile: ${pilePenalty}pt)` : ")"}
+                </span>
                 {p.faceDownCard ? (
                   <span className="rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[0.65rem] font-bold text-emerald-300">
                     Ready ✓
@@ -386,9 +386,10 @@ export function TakeANumberApp() {
           {/* Players status & Personal Rows / Piles */}
           <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {G.players.map((p, idx) => {
+              const prevScore = p.score;
               const pileBulls = p.personalPile.reduce((sum, c) => sum + c.points, 0);
               const pilePts = pileBulls * 2;
-              const currentLiveScore = p.score + pilePts;
+              const currentLiveScore = prevScore + pilePts;
 
               return (
                 <div
@@ -407,8 +408,9 @@ export function TakeANumberApp() {
                       <div className="text-xs font-bold text-amber-300">
                         Total Penalty: {currentLiveScore} pts
                       </div>
-                      <div className="text-[0.65rem] text-emerald-100/60">
-                        (# Pile: +{pilePts} pts)
+                      <div className="text-[0.65rem] text-emerald-100/60 font-mono">
+                        {prevScore > 0 ? `Prev Deals: ${prevScore}pt` : `R${G.currentRound} #Pile: ${pilePts}pt`}
+                        {prevScore > 0 && pilePts > 0 ? ` + R${G.currentRound} #Pile: ${pilePts}pt` : ""}
                       </div>
                     </div>
                   </div>
