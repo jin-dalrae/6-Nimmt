@@ -1,5 +1,14 @@
 import { ALL_CHARS, CHARACTERS } from "./characters";
-import { buildMap, DIRS, hexDist, neighbors } from "./board";
+import {
+  buildMap,
+  hexDist,
+  neighbors,
+  OFFICIAL_STARTS,
+  SETUP_CORDONED_EXITS,
+  SETUP_COVERED_MANHOLES,
+  SETUP_LIT_GAS,
+  stepInDir,
+} from "./board";
 import type { CharId, GameState, Hex, HexKey, Role } from "./types";
 import { hexKey, parseHex } from "./types";
 
@@ -30,28 +39,17 @@ function hashSeed(s: string): number {
   return h >>> 0;
 }
 
-const START: Record<CharId, Hex> = {
-  holmes: { q: -2, r: 0 },
-  watson: { q: 2, r: 0 },
-  smith: { q: 0, r: -2 },
-  lestrade: { q: 0, r: 2 },
-  stealthy: { q: 1, r: -1 },
-  gull: { q: -1, r: 1 },
-  bert: { q: 2, r: -2 },
-  goodley: { q: -2, r: 2 },
-};
-
 function log(G: GameState, msg: string) {
   G.log = [msg, ...G.log].slice(0, 40);
 }
 
-/** Who acts for activation slots 0..3 within a round */
+/** Who acts for activation slots 0..3 within a round (official pattern) */
 function actorForSlot(round: number, slot: number): Role {
-  // Odd rounds: D J D J | Even: J D J D
+  // Odd: D J J D | Even: J D D J
   const odd = round % 2 === 1;
   const pattern: Role[] = odd
-    ? ["detective", "jack", "detective", "jack"]
-    : ["jack", "detective", "jack", "detective"];
+    ? ["detective", "jack", "jack", "detective"]
+    : ["jack", "detective", "detective", "jack"];
   return pattern[slot]!;
 }
 
@@ -72,11 +70,14 @@ export function createGame(
   // 4 face-up for first turn
   const available = shuffle(ALL_CHARS, rng).slice(0, 4);
 
-  const litGas = shuffle([...map.gasSockets], rng).slice(0, 3);
+  // Official setup: 6 lit gaslights, 2 covered manholes, 2 cordoned exits
+  const litGas = SETUP_LIT_GAS.map(hexKey);
+  const coveredManholes = SETUP_COVERED_MANHOLES.map(hexKey);
+  const cordonedExits = SETUP_CORDONED_EXITS.map(hexKey);
 
   const positions = {} as Record<CharId, HexKey>;
   for (const id of ALL_CHARS) {
-    positions[id] = hexKey(START[id]);
+    positions[id] = hexKey(OFFICIAL_STARTS[id]);
   }
 
   const G: GameState = {
@@ -91,7 +92,9 @@ export function createGame(
     litGas,
     gasSockets: map.gasSockets,
     manholes: map.manholes,
+    coveredManholes,
     exits: map.exits,
+    cordonedExits,
     buildings: map.buildings,
     streets: map.streets,
     jackId,
@@ -109,6 +112,7 @@ export function createGame(
       humanRole === "jack"
         ? `You are secretly: ${CHARACTERS[jackId].name}.`
         : "Find Mr. Jack among the 8 — accuse wisely (1 try).",
+      "Whitechapel: 4 exits (2 cordoned), 6 gaslights lit, 2 manholes covered.",
     ],
     pendingPower: null,
     powerTargets: [],
@@ -122,9 +126,14 @@ function occupied(G: GameState): Set<HexKey> {
   return new Set(Object.values(G.positions));
 }
 
-function canEnter(G: GameState, who: CharId, to: HexKey): boolean {
-  const throughB = who === "stealthy";
-  if (G.buildings.includes(to)) return throughB;
+function openManholes(G: GameState): HexKey[] {
+  const covered = new Set(G.coveredManholes ?? []);
+  return G.manholes.filter((m) => !covered.has(m));
+}
+
+/** May end movement on this hex? */
+function canStop(G: GameState, who: CharId, to: HexKey): boolean {
+  if (G.buildings.includes(to) || G.gasSockets.includes(to)) return false;
   if (!G.streets.includes(to)) return false;
   const occ = occupied(G);
   occ.delete(G.positions[who]);
@@ -132,33 +141,45 @@ function canEnter(G: GameState, who: CharId, to: HexKey): boolean {
   return true;
 }
 
+/** May path through this hex (Stealthy can cross buildings/gas)? */
+function canTraverse(G: GameState, who: CharId, to: HexKey): boolean {
+  if (who === "stealthy") {
+    if (G.buildings.includes(to) || G.gasSockets.includes(to)) return true;
+    return G.streets.includes(to);
+  }
+  if (G.buildings.includes(to) || G.gasSockets.includes(to)) return false;
+  return G.streets.includes(to);
+}
+
 /** BFS reachable hexes in [min,max] steps */
 export function legalDestinations(G: GameState, who: CharId): HexKey[] {
   const def = CHARACTERS[who];
   const start = parseHex(G.positions[who]);
-  const useManhole = who === "bert";
   const result = new Set<HexKey>();
   const q: Array<{ h: Hex; d: number }> = [{ h: start, d: 0 }];
   const seen = new Map<string, number>();
   seen.set(hexKey(start), 0);
+  const sewer = openManholes(G);
 
   while (q.length) {
     const { h, d } = q.shift()!;
     if (d > 0 && d >= def.moveMin && d <= def.moveMax) {
-      result.add(hexKey(h));
+      const k = hexKey(h);
+      if (canStop(G, who, k)) result.add(k);
     }
     if (d >= def.moveMax) continue;
 
     const nextHexes: Hex[] = [...neighbors(h)];
-    if (useManhole && G.manholes.includes(hexKey(h))) {
-      for (const m of G.manholes) {
+    // Any character on an open manhole may spend 1 MP to another open manhole
+    if (sewer.includes(hexKey(h))) {
+      for (const m of sewer) {
         if (m !== hexKey(h)) nextHexes.push(parseHex(m));
       }
     }
 
     for (const n of nextHexes) {
       const nk = hexKey(n);
-      if (!canEnter(G, who, nk)) continue;
+      if (!canTraverse(G, who, nk)) continue;
       const nd = d + 1;
       if (nd > def.moveMax) continue;
       const prev = seen.get(nk);
@@ -175,33 +196,35 @@ export function getWatsonBeamHexes(G: GameState): HexKey[] {
   const w = G.positions.watson;
   if (!w) return [];
   const wh = parseHex(w);
-  const dir = DIRS[G.watsonDir ?? 0];
-  if (!dir) return [];
-
   const beam: HexKey[] = [];
-  let curr = { q: wh.q + dir.q, r: wh.r + dir.r };
+  let curr = stepInDir(wh, G.watsonDir ?? 0);
 
+  // Obstacles (buildings, gas sockets) stop the beam
   while (
-    (G.streets.includes(hexKey(curr)) || G.exits.includes(hexKey(curr))) &&
-    !G.buildings.includes(hexKey(curr))
+    G.streets.includes(hexKey(curr)) &&
+    !G.buildings.includes(hexKey(curr)) &&
+    !G.gasSockets.includes(hexKey(curr))
   ) {
     beam.push(hexKey(curr));
-    curr = { q: curr.q + dir.q, r: curr.r + dir.r };
+    curr = stepInDir(curr, G.watsonDir ?? 0);
   }
 
   return beam;
 }
 
 function isIlluminated(G: GameState, pos: HexKey): boolean {
+  // Lit gaslight illuminates all adjoining street hexes
   for (const g of G.litGas) {
-    if (g === pos || hexDist(parseHex(g), parseHex(pos)) === 1) return true;
+    if (hexDist(parseHex(g), parseHex(pos)) === 1) return true;
   }
 
+  // Watson lantern beam (Watson himself is not lit by it)
   if (pos !== G.positions.watson) {
     const beam = getWatsonBeamHexes(G);
     if (beam.includes(pos)) return true;
   }
 
+  // Adjacent to another character
   for (const id of ALL_CHARS) {
     const p = G.positions[id];
     if (p === pos) continue;
@@ -242,7 +265,8 @@ export function moveCharacter(G: GameState, dest: HexKey): GameState {
     who === "gull" ||
     who === "goodley" ||
     who === "lestrade" ||
-    who === "watson"
+    who === "watson" ||
+    who === "bert"
   ) {
     next.phase = "power";
     next.pendingPower = who;
@@ -268,7 +292,11 @@ function powerTargets(G: GameState, who: CharId): HexKey[] | CharId[] {
     case "watson":
       return ["dir_0", "dir_1", "dir_2", "dir_3", "dir_4", "dir_5"];
     case "lestrade":
-      return G.exits;
+      // Move a cordon onto any currently open exit (frees one, blocks another)
+      return G.exits.filter((e) => !(G.cordonedExits ?? []).includes(e));
+    case "bert":
+      // Move a cover onto any currently open manhole
+      return openManholes(G);
     default:
       return [];
   }
@@ -287,7 +315,7 @@ export function usePower(G: GameState, target: string): GameState {
     }
   } else if (who === "smith") {
     // Move a lit gas to empty socket: pick which lit to move if multiple — simplify move first lit
-    if (next.powerTargets.includes(target as HexKey)) {
+    if ((next.powerTargets as string[]).includes(target)) {
       if (next.litGas.length) {
         next.litGas = next.litGas.slice(1);
       }
@@ -296,7 +324,7 @@ export function usePower(G: GameState, target: string): GameState {
     }
   } else if (who === "gull") {
     const other = target as CharId;
-    if (ALL_CHARS.includes(other) && other !== "gull") {
+    if ((ALL_CHARS as string[]).includes(other) && other !== "gull") {
       const a = next.positions.gull;
       next.positions.gull = next.positions[other];
       next.positions[other] = a;
@@ -304,7 +332,7 @@ export function usePower(G: GameState, target: string): GameState {
     }
   } else if (who === "goodley") {
     const other = target as CharId;
-    if (ALL_CHARS.includes(other) && other !== "goodley") {
+    if ((ALL_CHARS as string[]).includes(other) && other !== "goodley") {
       const from = parseHex(next.positions[other]);
       const toG = parseHex(next.positions.goodley);
       // Move 1 step closer
@@ -326,7 +354,26 @@ export function usePower(G: GameState, target: string): GameState {
       log(next, `Goodley whistled — ${CHARACTERS[other].name} stepped closer.`);
     }
   } else if (who === "lestrade") {
-    log(next, `Lestrade cordoned an exit.`);
+    // Move one cordon onto the chosen open exit (free an old one)
+    const open = next.exits.filter(
+      (e) => !(next.cordonedExits ?? []).includes(e),
+    );
+    if (open.includes(target as HexKey) && (next.cordonedExits?.length ?? 0) > 0) {
+      next.cordonedExits = [
+        ...(next.cordonedExits ?? []).slice(1),
+        target as HexKey,
+      ];
+      log(next, `Lestrade moved a police cordon.`);
+    }
+  } else if (who === "bert") {
+    // Move one manhole cover onto an open manhole
+    if (openManholes(next).includes(target as HexKey) && next.coveredManholes.length) {
+      next.coveredManholes = [
+        ...next.coveredManholes.slice(1),
+        target as HexKey,
+      ];
+      log(next, `Bert moved a manhole cover.`);
+    }
   } else if (who === "watson") {
     if (target.startsWith("dir_")) {
       const dirIndex = Number(target.replace("dir_", ""));
@@ -401,13 +448,16 @@ export function resolveCall(G: GameState): GameState {
     }
   }
 
-  // Jack escape: end of odd rounds if unseen and on exit
-  if (next.round % 2 === 1 && !seen) {
+  // Jack escape: if unseen this call and standing on an open (uncordoned) exit
+  if (!seen) {
     const jp = next.positions[next.jackId];
-    if (next.exits.includes(jp)) {
+    const openExits = next.exits.filter(
+      (e) => !(next.cordonedExits ?? []).includes(e),
+    );
+    if (openExits.includes(jp)) {
       next.phase = "ended";
       next.detectiveWon = false;
-      log(next, "Mr. Jack escaped through an exit! Jack wins.");
+      log(next, "Mr. Jack escaped through an open exit! Jack wins.");
       return next;
     }
   }

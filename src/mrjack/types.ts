@@ -57,12 +57,16 @@ export type GameState = {
   watsonDir: number;
   /** Gaslight hexes that are currently lit */
   litGas: HexKey[];
-  /** All gaslight sockets */
+  /** All gaslight sockets (obstacles; light adjacent streets when lit) */
   gasSockets: HexKey[];
   /** Manhole hexes */
   manholes: HexKey[];
-  /** Edge hexes Jack can escape from when unseen */
+  /** Covered manholes (no sewer entry/exit) */
+  coveredManholes: HexKey[];
+  /** All four exit hexes */
   exits: HexKey[];
+  /** Exits currently blocked by police cordons */
+  cordonedExits: HexKey[];
   /** Building hexes (impassable except stealthy) */
   buildings: HexKey[];
   /** Walkable streets */

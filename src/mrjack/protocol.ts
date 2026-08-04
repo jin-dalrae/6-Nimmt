@@ -35,7 +35,9 @@ export type MrJackPublicState = {
   litGas: HexKey[];
   gasSockets: HexKey[];
   manholes: HexKey[];
+  coveredManholes: HexKey[];
   exits: HexKey[];
+  cordonedExits: HexKey[];
   buildings: HexKey[];
   streets: HexKey[];
   /** Only for Jack seat (or game over); Detective gets null */

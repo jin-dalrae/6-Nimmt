@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePartySocket } from "partysocket/react";
 import { ALL_CHARS, CHARACTERS } from "./characters";
-import { buildMap, DIRS, pixelPos } from "./board";
+import { buildMap, hexDist, pixelPos, stepInDir } from "./board";
 import {
   accuse,
   createGame,
@@ -95,9 +95,11 @@ function BoardView({
     positions: Record<CharId, HexKey>;
     watsonDir?: number;
     litGas: HexKey[];
-    gasSockets: HexKey[];
-    manholes: HexKey[];
+    gasSockets?: HexKey[];
+    manholes?: HexKey[];
+    coveredManholes?: HexKey[];
     exits: HexKey[];
+    cordonedExits?: HexKey[];
     buildings: HexKey[];
     streets: HexKey[];
     cleared: CharId[];
@@ -121,13 +123,43 @@ function BoardView({
   onResolveCall: () => void;
   onAccuse: (id: CharId) => void;
 }) {
-  const size = 26;
+  const size = 18; // denser official-scale board (13 columns)
   const defaultExits = useMemo(() => buildMap().exits, []);
-  const watsonBeamHexes = useMemo(() => getWatsonBeamHexes(G as GameState), [G]);
-  const positions = G.streets.map(parseHex);
-  const xs = positions.map((h) => pixelPos(h, size).x);
-  const ys = positions.map((h) => pixelPos(h, size).y);
-  const pad = 40;
+  const watsonBeamHexes = useMemo(
+    () => getWatsonBeamHexes(G as unknown as GameState),
+    [G],
+  );
+  const mapFallback = useMemo(() => buildMap(), []);
+  const gasSockets = G.gasSockets ?? mapFallback.gasSockets;
+  const manholes = G.manholes ?? mapFallback.manholes;
+  const coveredManholes = G.coveredManholes ?? [];
+
+  // Bound the full map: streets + buildings + gas + exits + tokens
+  const boundKeys = useMemo(() => {
+    const keys = new Set<string>([
+      ...G.streets,
+      ...G.buildings,
+      ...G.exits,
+      ...gasSockets,
+      ...manholes,
+      ...Object.values(G.positions),
+      ...defaultExits,
+    ]);
+    return [...keys];
+  }, [
+    G.streets,
+    G.buildings,
+    G.exits,
+    gasSockets,
+    manholes,
+    G.positions,
+    defaultExits,
+  ]);
+  const boundHexes = boundKeys.map(parseHex);
+  const xs = boundHexes.map((h) => pixelPos(h, size).x);
+  const ys = boundHexes.map((h) => pixelPos(h, size).y);
+  // Hex outer radius ≈ size; tokens/labels need extra room so edges aren't clipped
+  const pad = size * 2.1;
   const minX = Math.min(...xs) - pad;
   const minY = Math.min(...ys) - pad;
   const maxX = Math.max(...xs) + pad;
@@ -150,8 +182,8 @@ function BoardView({
         </div>
       ) : null}
 
-      <div className="grid gap-3 lg:grid-cols-[1fr_16rem]">
-        <div className="felt-panel overflow-x-auto p-2 sm:p-3">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_16rem]">
+        <div className="felt-panel min-w-0 overflow-visible p-2 sm:p-3">
           {G.log && G.log.length > 0 && (
             <div className="mb-2.5 rounded-xl border border-violet-400/30 bg-violet-950/40 p-2.5 text-xs text-violet-100">
               <div className="font-bold text-violet-300 text-[0.7rem] uppercase tracking-wider mb-1 flex items-center justify-between">
@@ -166,12 +198,16 @@ function BoardView({
               </ul>
             </div>
           )}
-          <svg viewBox={vb} className="mx-auto h-auto w-full max-w-2xl">
+          <svg
+            viewBox={vb}
+            className="mx-auto h-auto w-full max-w-none"
+            style={{ overflow: "visible" }}
+          >
             {G.buildings.map((k) => {
               const h = parseHex(k);
               const { x, y } = pixelPos(h, size);
               return (
-                <g key={k}>
+                <g key={`b-${k}`}>
                   <HexPoly
                     q={h.q}
                     r={h.r}
@@ -182,21 +218,38 @@ function BoardView({
                   />
                   <text
                     x={x}
-                    y={y - 2}
+                    y={y + 3}
                     textAnchor="middle"
                     fontSize={10}
-                    opacity={0.6}
+                    opacity={0.55}
+                    pointerEvents="none"
                   >
                     🏛️
                   </text>
+                </g>
+              );
+            })}
+            {gasSockets.map((k) => {
+              const h = parseHex(k);
+              const { x, y } = pixelPos(h, size);
+              const lit = G.litGas.includes(k);
+              return (
+                <g key={`g-${k}`}>
+                  <HexPoly
+                    q={h.q}
+                    r={h.r}
+                    size={size}
+                    fill={lit ? "rgba(254, 243, 199, 0.4)" : "rgba(30, 41, 59, 0.85)"}
+                    stroke={lit ? "#fbbf24" : "#475569"}
+                  />
                   <text
                     x={x}
-                    y={y + 9}
+                    y={y + 4}
                     textAnchor="middle"
-                    fontSize={5.5}
-                    fill="#64748b"
+                    fontSize={11}
+                    pointerEvents="none"
                   >
-                    ({h.q},{h.r})
+                    {lit ? "💡" : "🕯️"}
                   </text>
                 </g>
               );
@@ -204,11 +257,18 @@ function BoardView({
             {G.streets.map((k) => {
               const h = parseHex(k);
               const { x, y } = pixelPos(h, size);
-              const lit = G.litGas.includes(k);
-              const gasSocket = G.gasSockets.includes(k);
-              const man = G.manholes.includes(k);
-              const isOpenExit = G.exits.includes(k);
-              const isCordonedExit = defaultExits.includes(k) && !G.exits.includes(k);
+              const lit = G.litGas.some(
+                (g) => hexDist(parseHex(g), h) === 1,
+              );
+              const man = manholes.includes(k);
+              const covered = coveredManholes.includes(k);
+              const cordoned = G.cordonedExits ?? [];
+              const isOpenExit = G.exits.includes(k) && !cordoned.includes(k);
+              const isCordonedExit =
+                G.exits.includes(k) && cordoned.includes(k)
+                  ? true
+                  : defaultExits.includes(k) &&
+                    !G.exits.includes(k);
               const inWatsonBeam = watsonBeamHexes.includes(k);
               const legal =
                 G.legalMoves.includes(k) && human && G.phase === "move";
@@ -228,12 +288,12 @@ function BoardView({
                           ? "rgba(251, 191, 36, 0.55)"
                           : inWatsonBeam
                             ? "rgba(253, 224, 71, 0.45)"
-                            : lit
-                              ? "rgba(254, 243, 199, 0.35)"
-                              : isOpenExit
-                                ? "rgba(52, 211, 153, 0.2)"
-                                : isCordonedExit
-                                  ? "rgba(244, 63, 94, 0.25)"
+                            : isOpenExit
+                              ? "rgba(52, 211, 153, 0.28)"
+                              : isCordonedExit
+                                ? "rgba(244, 63, 94, 0.28)"
+                                : lit
+                                  ? "rgba(254, 243, 199, 0.28)"
                                   : "rgba(15, 23, 42, 0.55)"
                     }
                     stroke={
@@ -246,7 +306,7 @@ function BoardView({
                             : isOpenExit
                               ? "#34d399"
                               : man
-                                ? "#64748b"
+                                ? "#94a3b8"
                                 : "#334155"
                     }
                     onClick={
@@ -258,75 +318,38 @@ function BoardView({
                     }
                   />
 
-                  <text
-                    x={x}
-                    y={y + 11}
-                    textAnchor="middle"
-                    fontSize={5.5}
-                    fill="#94a3b8"
-                    opacity={0.65}
-                    pointerEvents="none"
-                  >
-                    ({h.q},{h.r})
-                  </text>
-
                   {isOpenExit ? (
-                    <g pointerEvents="none">
-                      <text x={x} y={y - 5} textAnchor="middle" fontSize={8}>
-                        🚪
-                      </text>
-                      <text
-                        x={x}
-                        y={y + 3}
-                        textAnchor="middle"
-                        fontSize={5.5}
-                        fontWeight={700}
-                        fill="#34d399"
-                      >
-                        EXIT
-                      </text>
-                    </g>
-                  ) : isCordonedExit ? (
-                    <g pointerEvents="none">
-                      <text x={x} y={y - 5} textAnchor="middle" fontSize={8}>
-                        🚧
-                      </text>
-                      <text
-                        x={x}
-                        y={y + 3}
-                        textAnchor="middle"
-                        fontSize={5.5}
-                        fontWeight={700}
-                        fill="#f43f5e"
-                      >
-                        CORDON
-                      </text>
-                    </g>
-                  ) : null}
-
-                  {gasSocket && !isOpenExit && !isCordonedExit ? (
                     <text
-                      x={x - 6}
-                      y={y - 3}
+                      x={x}
+                      y={y + 4}
                       textAnchor="middle"
-                      fontSize={8}
+                      fontSize={9}
                       pointerEvents="none"
-                      opacity={lit ? 1 : 0.4}
                     >
-                      {lit ? "💡" : "🕯️"}
+                      🚪
+                    </text>
+                  ) : isCordonedExit ? (
+                    <text
+                      x={x}
+                      y={y + 4}
+                      textAnchor="middle"
+                      fontSize={9}
+                      pointerEvents="none"
+                    >
+                      🚧
                     </text>
                   ) : null}
 
                   {man && !isOpenExit && !isCordonedExit ? (
                     <text
-                      x={x + 6}
-                      y={y - 3}
+                      x={x}
+                      y={y - 4}
                       textAnchor="middle"
-                      fontSize={7.5}
+                      fontSize={8}
                       pointerEvents="none"
-                      opacity={0.7}
+                      opacity={covered ? 0.35 : 0.85}
                     >
-                      🕳️
+                      {covered ? "🚫" : "🕳️"}
                     </text>
                   ) : null}
                 </g>
@@ -336,10 +359,11 @@ function BoardView({
             {G.positions.watson && (() => {
               const wh = parseHex(G.positions.watson);
               const { x: wx, y: wy } = pixelPos(wh, size);
-              const dir = DIRS[G.watsonDir ?? 0];
-              if (!dir) return null;
-              const farHex = { q: wh.q + dir.q * 6, r: wh.r + dir.r * 6 };
-              const { x: fx, y: fy } = pixelPos(farHex, size);
+              const beam = watsonBeamHexes;
+              const endHex = beam.length
+                ? parseHex(beam[beam.length - 1]!)
+                : stepInDir(wh, G.watsonDir ?? 0);
+              const { x: fx, y: fy } = pixelPos(endHex, size);
 
               return (
                 <line
@@ -406,7 +430,7 @@ function BoardView({
             })}
           </svg>
           <p className="mt-1.5 text-center text-[0.65rem] text-emerald-100/55">
-            Gold = Move · Cyan = Target · 🚪 Exit · 🚧 Cordon · 💡 Lit Gas · 🕯️ Unlit · 🕳️ Manhole · (q,r) Coords
+            Gold = move · 🚪 open exit · 🚧 cordon · 💡 lit gas · 🕯️ socket · 🕳️ manhole · 🏛️ building
           </p>
         </div>
 
@@ -430,6 +454,7 @@ function BoardView({
               <>
                 {(() => {
                   const isOdd = G.round % 2 === 1;
+                  // Official: odd D-J-J-D, even J-D-D-J
                   const slotPattern: Role[] = isOdd
                     ? ["detective", "jack", "jack", "detective"]
                     : ["jack", "detective", "detective", "jack"];

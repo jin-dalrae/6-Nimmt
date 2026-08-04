@@ -21,7 +21,7 @@ Template pattern from [threepointone/partyvite](https://github.com/threepointone
 |------|------|
 | `/` | **Take 5!** multiplayer |
 | `/take-a-number` | **Take a Number** (*X nimmt!*) — multiplayer rooms (up to 4) or local solo vs AI. |
-| `/mrjack` | **Mr. Jack** — 2-player deduction (local / vs AI). Unofficial fan adaptation. |
+| `/mrjack` | **Mr. Jack** — 2-player deduction (local vs Gemini / online). Whitechapel hex map based on the official board; unofficial digital rules. |
 
 ## Play (Take 5!)
 
