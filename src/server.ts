@@ -43,6 +43,8 @@ import {
 
 // Online Mr. Jack (2-player) — separate PartyServer DO
 export { MrJackRoom } from "./mrjack/room";
+// Online Take a Number — separate PartyServer DO
+export { TakeANumberRoom } from "./takeanumber/room";
 
 export type RoomPresence = {
   roomId: string;
@@ -55,6 +57,7 @@ export type RoomPresence = {
 type Env = {
   GameRoom: DurableObjectNamespace<GameRoom>;
   MrJackRoom: DurableObjectNamespace;
+  TakeANumberRoom: DurableObjectNamespace;
   ASSETS?: Fetcher;
   GEMINI_API_KEY?: string;
   /** Analytics D1 — optional so local/dev without binding still runs */

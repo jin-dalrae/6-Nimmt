@@ -20,7 +20,7 @@ Template pattern from [threepointone/partyvite](https://github.com/threepointone
 | Path | Game |
 |------|------|
 | `/` | **Take 5!** multiplayer |
-| `/take-a-number` | **Take a Number** (*X nimmt!*) — 3 center rows (3, 4, 5 max) + Personal # Row vs AI. |
+| `/take-a-number` | **Take a Number** (*X nimmt!*) — multiplayer rooms (up to 4) or local solo vs AI. |
 | `/mrjack` | **Mr. Jack** — 2-player deduction (local / vs AI). Unofficial fan adaptation. |
 
 ## Play (Take 5!)

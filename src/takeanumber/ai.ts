@@ -41,11 +41,11 @@ export function chooseCardForBot(G: GameState, playerIndex: number): Card | null
     if (targetRowIdx !== -1) {
       const row = G.centerRows[targetRowIdx];
       const slotsLeft = row.capacity - row.cards.length;
-      if (slotsLeft > 1) {
-        // Safe placement!
+      if (slotsLeft > 0) {
+        // Safe: still room under capacity
         risk = smallestDiff * 0.5;
       } else {
-        // High risk of taking row
+        // Row already full — this card takes it
         risk = 100 + row.cards.reduce((sum, c) => sum + c.points, 0);
       }
     } else {

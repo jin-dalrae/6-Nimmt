@@ -29,6 +29,7 @@ export enum Phase {
 }
 
 export interface CenterRow {
+  /** Max cards that may sit in the row; the next card beyond this takes them. */
   capacity: number; // 3, 4, or 5
   cards: Card[];
 }

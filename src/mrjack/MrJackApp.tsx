@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePartySocket } from "partysocket/react";
 import { ALL_CHARS, CHARACTERS } from "./characters";
-import { buildMap, pixelPos } from "./board";
+import { buildMap, DIRS, pixelPos } from "./board";
 import {
   accuse,
   createGame,
@@ -93,6 +93,7 @@ function BoardView({
     currentRole: Role;
     available: CharId[];
     positions: Record<CharId, HexKey>;
+    watsonDir?: number;
     litGas: HexKey[];
     gasSockets: HexKey[];
     manholes: HexKey[];
@@ -648,18 +649,28 @@ export function MrJackApp() {
         body: JSON.stringify({ game: g }),
       });
       if (res.ok) {
-        const data = (await res.json()) as { game?: GameState; engine?: string };
+        const data = (await res.json()) as {
+          game?: GameState;
+          engine?: string;
+          error?: string;
+        };
         if (data.game?.phase) {
-          setAiEngine(data.engine ?? "gemini");
+          setAiEngine(data.engine ?? (hasGemini ? "gemini+heuristic" : "heuristic"));
+          setHasGemini((prev) =>
+            data.engine?.includes("gemini") ? true : prev,
+          );
           return data.game;
         }
+        console.warn("MrJack AI response missing game", data);
+      } else {
+        console.warn("MrJack AI HTTP", res.status, await res.text().catch(() => ""));
       }
-    } catch {
-      // network / worker — fall through
+    } catch (e) {
+      console.warn("MrJack AI fetch failed", e);
     }
     setAiEngine("heuristic");
     return runAiUntilHuman(g);
-  }, []);
+  }, [hasGemini]);
 
   // —— Online ——
   const [name, setName] = useState(
@@ -783,13 +794,36 @@ export function MrJackApp() {
     [],
   );
 
-  // When it's the AI's turn, call the Worker so Gemini can play
+  // When it's the AI's turn (or witness call in solo vs AI), advance via Worker/Gemini
   useEffect(() => {
     if (!localG || !localG.vsAi || localG.phase === "ended") return;
+
+    // Witness call is mechanical — auto-resolve in solo so the game doesn't stall
+    if (localG.phase === "call") {
+      if (aiBusyRef.current) return;
+      let cancelled = false;
+      aiBusyRef.current = true;
+      setAiBusy(true);
+      const t = window.setTimeout(() => {
+        if (cancelled) return;
+        setLocalG((prev) =>
+          prev && prev.phase === "call" ? resolveCall(prev) : prev,
+        );
+        aiBusyRef.current = false;
+        setAiBusy(false);
+      }, 500);
+      return () => {
+        cancelled = true;
+        window.clearTimeout(t);
+        aiBusyRef.current = false;
+      };
+    }
+
     if (isHumanTurn(localG)) return;
     if (aiBusyRef.current) return;
 
     let cancelled = false;
+    let finished = false;
     aiBusyRef.current = true;
     setAiBusy(true);
     const snapshot = localG;
@@ -797,26 +831,36 @@ export function MrJackApp() {
       void (async () => {
         try {
           const next = await runOpponentAsync(snapshot);
+          if (cancelled) return;
+          const newLogs = next.log.filter((line) => !snapshot.log.includes(line));
+          if (newLogs.length > 0) {
+            showToast(`⚡ ${newLogs[0]}`);
+          }
+          setLocalG(next);
+        } catch (e) {
+          console.warn("MrJack AI turn failed", e);
           if (!cancelled) {
-            const newLogs = next.log.filter((line) => !snapshot.log.includes(line));
-            if (newLogs.length > 0) {
-              showToast(`⚡ Opponent Action: ${newLogs[0]}`);
-            }
-            setLocalG(next);
+            // Always make progress with local heuristic if the Worker fails
+            setLocalG((prev) =>
+              prev && !isHumanTurn(prev) ? runAiUntilHuman(prev) : prev,
+            );
+            setAiEngine("heuristic");
+            showToast("AI fell back to local heuristics");
           }
         } finally {
+          finished = true;
           aiBusyRef.current = false;
           if (!cancelled) setAiBusy(false);
         }
       })();
-    }, 450);
+    }, 400);
     return () => {
       cancelled = true;
       window.clearTimeout(t);
-      // Allow a re-run if this effect is superseded before the fetch finishes
-      aiBusyRef.current = false;
+      // Only free the lock if this run never finished (superseded mid-flight)
+      if (!finished) aiBusyRef.current = false;
     };
-  }, [localG, runOpponentAsync]);
+  }, [localG, runOpponentAsync, showToast]);
 
   async function startLocal() {
     let g = createGame(role, vsAi);

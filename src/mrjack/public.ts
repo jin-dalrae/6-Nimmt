@@ -38,6 +38,7 @@ export function toPublicMrJack(
     available: [...G.available],
     used: [...G.used],
     positions: { ...G.positions },
+    watsonDir: G.watsonDir ?? 0,
     litGas: [...G.litGas],
     gasSockets: [...G.gasSockets],
     manholes: [...G.manholes],

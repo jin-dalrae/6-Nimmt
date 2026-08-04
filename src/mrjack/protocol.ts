@@ -30,6 +30,8 @@ export type MrJackPublicState = {
   available: CharId[];
   used: CharId[];
   positions: Record<CharId, HexKey>;
+  /** Watson lantern direction index (0–5) */
+  watsonDir: number;
   litGas: HexKey[];
   gasSockets: HexKey[];
   manholes: HexKey[];

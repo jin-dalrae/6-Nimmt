@@ -126,10 +126,10 @@ export function resolveTurn(G: GameState): GameState {
       return { ...G };
     }
 
-    // Check if best row will be full after adding card
+    // Row holds up to `capacity` cards. The next card past capacity takes the full row.
+    // e.g. 4-row may sit at 4; placing a 5th takes those 4 and starts the row again.
     const targetRow = G.centerRows[bestRowIdx];
-    if (targetRow.cards.length + 1 >= targetRow.capacity) {
-      // Takes row!
+    if (targetRow.cards.length >= targetRow.capacity) {
       const taken = [...targetRow.cards];
       targetRow.cards = [card];
       p.faceDownCard = null;
@@ -138,7 +138,7 @@ export function resolveTurn(G: GameState): GameState {
       G.phase = Phase.PickPersonalCard;
       G.activePlayerIndex = lowestIdx;
       G.log.push(
-        `${p.name} placed ${card.number} on the ${targetRow.capacity}-Cards Row and took ${taken.length} card(s)!`,
+        `${p.name} placed ${card.number} on the full ${targetRow.capacity}-Cards Row and took ${taken.length} card(s)!`,
       );
       return { ...G };
     } else {

@@ -17,6 +17,10 @@
       {
         "name": "MrJackRoom",
         "class_name": "MrJackRoom"
+      },
+      {
+        "name": "TakeANumberRoom",
+        "class_name": "TakeANumberRoom"
       }
     ]
   },
@@ -28,6 +32,10 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["MrJackRoom"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["TakeANumberRoom"]
     }
   ],
   "d1_databases": [
